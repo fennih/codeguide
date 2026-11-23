@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"ccwatch/internal/cmux"
-	"ccwatch/internal/effects"
-	"ccwatch/internal/sanitize"
-	"ccwatch/internal/subagents"
-	"ccwatch/internal/toolfmt"
-	"ccwatch/internal/transcript"
-	"ccwatch/internal/workstream"
+	"github.com/fennih/codeguide/internal/cmux"
+	"github.com/fennih/codeguide/internal/effects"
+	"github.com/fennih/codeguide/internal/sanitize"
+	"github.com/fennih/codeguide/internal/subagents"
+	"github.com/fennih/codeguide/internal/toolfmt"
+	"github.com/fennih/codeguide/internal/transcript"
+	"github.com/fennih/codeguide/internal/workstream"
 )
 
 type Lane int

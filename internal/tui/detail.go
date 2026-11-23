@@ -8,11 +8,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
-	"ccwatch/internal/model"
-	"ccwatch/internal/sanitize"
-	"ccwatch/internal/subagents"
-	"ccwatch/internal/toolfmt"
-	"ccwatch/internal/transcript"
+	"github.com/fennih/codeguide/internal/model"
+	"github.com/fennih/codeguide/internal/sanitize"
+	"github.com/fennih/codeguide/internal/subagents"
+	"github.com/fennih/codeguide/internal/toolfmt"
+	"github.com/fennih/codeguide/internal/transcript"
 )
 
 // detail is the state of the single-session view.

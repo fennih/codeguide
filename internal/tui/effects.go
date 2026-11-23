@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"ccwatch/internal/model"
-	"ccwatch/internal/sanitize"
+	"github.com/fennih/codeguide/internal/model"
+	"github.com/fennih/codeguide/internal/sanitize"
 )
 
 func (m Model) ledgerRows() []model.EffectRow {

@@ -1,4 +1,4 @@
-module ccwatch
+module github.com/fennih/codeguide
 
 go 1.24.5
 

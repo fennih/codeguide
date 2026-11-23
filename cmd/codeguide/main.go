@@ -16,18 +16,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"ccwatch/internal/app"
-	"ccwatch/internal/cmux"
-	"ccwatch/internal/model"
-	"ccwatch/internal/subagents"
-	"ccwatch/internal/summary"
-	"ccwatch/internal/tui"
-	"ccwatch/internal/workstream"
+	"github.com/fennih/codeguide/internal/app"
+	"github.com/fennih/codeguide/internal/cmux"
+	"github.com/fennih/codeguide/internal/model"
+	"github.com/fennih/codeguide/internal/subagents"
+	"github.com/fennih/codeguide/internal/summary"
+	"github.com/fennih/codeguide/internal/tui"
+	"github.com/fennih/codeguide/internal/workstream"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "ccwatch:", err)
+		fmt.Fprintln(os.Stderr, "codeguide:", err)
 		os.Exit(1)
 	}
 }
@@ -52,7 +52,7 @@ func run() error {
 		staleAfter = flag.Duration("stale-after", 24*time.Hour, "idle time after which a session is collapsed")
 		maxPerHour = flag.Int("max-per-hour", 60, "cap on summary calls per hour")
 		coldStart  = flag.Int("cold-start", 20, "recent sessions to summarize at startup")
-		stateDir   = flag.String("state-dir", filepath.Join(home, ".local", "state", "ccwatch"), "cache directory")
+		stateDir   = flag.String("state-dir", filepath.Join(home, ".local", "state", "codeguide"), "cache directory")
 		logPath    = flag.String("workstream", filepath.Join(home, ".cmuxterm", "workstream.jsonl"), "cmux Feed log")
 	)
 	flag.Parse()
@@ -167,7 +167,7 @@ func run() error {
 	defer col.Flush()
 	col.Presence = &cmux.Presence{}
 	// Until the first event, only trust that the user is looking at cmux when
-	// ccwatch itself is the tab in front (it was just launched there).
+	// codeguide itself is the tab in front (it was just launched there).
 	if front, err := cm.FocusedSurface(ctx); err == nil {
 		col.Presence.Seed(front, front == col.SelfPanel)
 	}

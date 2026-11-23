@@ -17,9 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"ccwatch/internal/effects"
-	"ccwatch/internal/sanitize"
-	"ccwatch/internal/toolfmt"
+	"github.com/fennih/codeguide/internal/effects"
+	"github.com/fennih/codeguide/internal/sanitize"
+	"github.com/fennih/codeguide/internal/toolfmt"
 )
 
 const (

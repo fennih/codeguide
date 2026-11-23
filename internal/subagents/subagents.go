@@ -1,6 +1,6 @@
 // Package subagents reads Claude Code's per-subagent transcript files.
 // cmux does not attribute tool calls to subagents, so this is the one place
-// ccwatch reads Claude's internal (unstable) transcript format. Any parse
+// codeguide reads Claude's internal (unstable) transcript format. Any parse
 // failure degrades to label-only rows.
 package subagents
 
@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"ccwatch/internal/toolfmt"
-	"ccwatch/internal/transcript"
+	"github.com/fennih/codeguide/internal/toolfmt"
+	"github.com/fennih/codeguide/internal/transcript"
 )
 
 const (

@@ -11,10 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"ccwatch/internal/cmux"
-	"ccwatch/internal/model"
-	"ccwatch/internal/sanitize"
-	"ccwatch/internal/summary"
+	"github.com/fennih/codeguide/internal/cmux"
+	"github.com/fennih/codeguide/internal/model"
+	"github.com/fennih/codeguide/internal/sanitize"
+	"github.com/fennih/codeguide/internal/summary"
 )
 
 const minTile = 56
@@ -413,7 +413,7 @@ func (m Model) items() []model.View {
 
 func (m Model) View() string {
 	if m.w < 30 || m.h < 8 {
-		return "ccwatch: finestra troppo piccola"
+		return "codeguide: finestra troppo piccola"
 	}
 	now := time.Now()
 	if m.inDetail {
@@ -558,7 +558,7 @@ func (m Model) header(now time.Time) string {
 			nIdle++
 		}
 	}
-	left := sHeader.Render("ccwatch") + "  " +
+	left := sHeader.Render("codeguide") + "  " +
 		sAccent.Render(fmt.Sprintf("%d al lavoro", nWork)) + sDim.Render(" · ") +
 		sYellow.Render(fmt.Sprintf("%d servono te", nYou)) + sDim.Render(" · ") +
 		sDim.Render(fmt.Sprintf("%d ferme", nIdle))

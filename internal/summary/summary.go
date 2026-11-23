@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"ccwatch/internal/model"
-	"ccwatch/internal/sanitize"
-	"ccwatch/internal/statefile"
+	"github.com/fennih/codeguide/internal/model"
+	"github.com/fennih/codeguide/internal/sanitize"
+	"github.com/fennih/codeguide/internal/statefile"
 )
 
 const (

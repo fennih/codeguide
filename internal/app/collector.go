@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"ccwatch/internal/cmux"
-	"ccwatch/internal/model"
-	"ccwatch/internal/statefile"
-	"ccwatch/internal/subagents"
-	"ccwatch/internal/summary"
-	"ccwatch/internal/transcript"
-	"ccwatch/internal/workstream"
+	"github.com/fennih/codeguide/internal/cmux"
+	"github.com/fennih/codeguide/internal/model"
+	"github.com/fennih/codeguide/internal/statefile"
+	"github.com/fennih/codeguide/internal/subagents"
+	"github.com/fennih/codeguide/internal/summary"
+	"github.com/fennih/codeguide/internal/transcript"
+	"github.com/fennih/codeguide/internal/workstream"
 )
 
 const (
@@ -55,7 +55,7 @@ type Collector struct {
 	ColdStart int // sessions to summarize at startup
 	ColdAge   time.Duration
 	Presence  *cmux.Presence // nil when cmux events are unavailable
-	SelfPanel string         // ccwatch's own cmux surface, from CMUX_SURFACE_ID
+	SelfPanel string         // codeguide's own cmux surface, from CMUX_SURFACE_ID
 	StateDir  string         // where seen.json lives; "" disables it
 	Persist   bool           // write seen.json (off for --once and --frame)
 
@@ -190,13 +190,13 @@ func (c *Collector) Tick(ctx context.Context) {
 	}
 }
 
-// Look records that the user just looked at a session from ccwatch.
+// Look records that the user just looked at a session from codeguide.
 func (c *Collector) Look(sessionID string) {
 	c.Store.Look(sessionID, time.Now())
 }
 
 // markLooked credits the session in front in cmux, or the one open in the
-// detail view while ccwatch itself is in front, then persists now and then.
+// detail view while codeguide itself is in front, then persists now and then.
 func (c *Collector) markLooked(now time.Time) {
 	focus := c.focused()
 	if c.Presence != nil {
