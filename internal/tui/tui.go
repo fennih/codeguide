@@ -16,9 +16,10 @@ import (
 	"github.com/fennih/codeguide/internal/model"
 	"github.com/fennih/codeguide/internal/sanitize"
 	"github.com/fennih/codeguide/internal/summary"
+	"github.com/fennih/codeguide/internal/usage"
 )
 
-const minTile = 56
+const minTile = 70
 
 // Snapshot is pushed by the collector loop.
 type Snapshot struct {
@@ -26,6 +27,7 @@ type Snapshot struct {
 	CallsToday int
 	Effects    []model.EffectRow // only while the effects view is open
 	Stats      summary.Stats
+	Plan       usage.Plan
 	LLM        bool
 	Err        string
 	At         time.Time
@@ -209,11 +211,11 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(items) > 0 {
 			m.selected = items[len(items)-1].SessionID
 		}
-	case "enter", " ":
+	case " ", "v":
 		if idx >= 0 {
 			return m.openDetail(items[idx].SessionID), nil
 		}
-	case "o":
+	case "enter", "o":
 		if idx >= 0 {
 			m.status = ""
 			return m, m.jump(items[idx])
@@ -357,9 +359,10 @@ func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if msg.Y < h.y0 || msg.Y >= h.y1 || msg.X < h.x0 || msg.X >= h.x1 {
 				continue
 			}
-			// A click on the selected session opens it; otherwise it selects.
+			// A click on the selected session jumps to its tab; otherwise it selects.
 			if h.sid == items[idx].SessionID {
-				return m.openDetail(h.sid), nil
+				m.status = ""
+				return m, m.jump(items[idx])
 			}
 			m.selected = h.sid
 			break
@@ -538,7 +541,7 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 	out = append(out, visible...)
 	if m.help {
 		out = append(out,
-			sDim.Render(i18n.T(" ↑↓/jk select   ⏎ or click opens the live detail   o jump to the cmux tab   / filter")),
+			sDim.Render(i18n.T(" ↑↓/jk select   ⏎ or click jumps to the cmux tab   space/v opens the live detail   / filter")),
 			sDim.Render(i18n.T(" r only sessions with news   e external effects   g by project   tab old   s redo goal/outcome   q quit")),
 			sDim.Render(i18n.T(" ▲ needs you   ● action   ✗ error   +N −M lines changed   ↳ subagent   ✓ outcome   • unread")),
 		)
@@ -570,8 +573,19 @@ func (m Model) header(now time.Time) string {
 			right += fmt.Sprintf(" +%d", m.snap.Stats.Queued)
 		}
 	}
-	right += "  " + now.Format("15:04:05")
-	right = sDim.Render(right)
+	clock := sDim.Render("  " + now.Format("15:04:05"))
+	right = sDim.Render(right) + clock
+	// Plan limits matter more than the call counts, which go first when the
+	// line is too narrow.
+	if plan := planText(m.snap.Plan, now, true); plan != "" {
+		short := planText(m.snap.Plan, now, false)
+		for _, c := range []string{plan + sDim.Render("  │  ") + right, plan + clock, short + clock, short} {
+			if width(left)+width(c)+1 <= m.w {
+				right = c
+				break
+			}
+		}
+	}
 	gap := m.w - width(left) - width(right)
 	if gap < 1 {
 		return lipgloss.NewStyle().MaxWidth(m.w).Render(left)
@@ -603,17 +617,20 @@ func (m Model) footer() string {
 	case nNews > 1:
 		parts = append(parts, sBlue.Render(i18n.T("%d sessions with news · r to see them", nNews)))
 	}
+	// The result of the user's last action wins over background errors.
 	msg := m.status
-	if m.snap.Err != "" {
+	switch {
+	case msg != "":
+	case m.snap.Err != "":
 		msg = m.snap.Err
-	} else if m.snap.Stats.LastErr != "" {
+	case m.snap.Stats.LastErr != "":
 		msg = i18n.T("summaries: ") + m.snap.Stats.LastErr
 	}
 	if msg != "" {
 		parts = append(parts, sRed.Render(sanitize.Line(msg, 100)))
 	}
 	if msg == "" {
-		parts = append(parts, sDim.Render(i18n.T("⏎ detail · o jump to tab · / filter · g project · tab old · ? help · q quit")))
+		parts = append(parts, sDim.Render(i18n.T("⏎ jump to tab · space detail · / filter · g project · tab old · ? help · q quit")))
 	}
 	return lipgloss.NewStyle().MaxWidth(m.w).Render(" " + strings.Join(parts, sDim.Render("  ·  ")))
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/fennih/codeguide/internal/subagents"
 	"github.com/fennih/codeguide/internal/summary"
 	"github.com/fennih/codeguide/internal/tui"
+	"github.com/fennih/codeguide/internal/usage"
 	"github.com/fennih/codeguide/internal/workstream"
 )
 
@@ -75,6 +76,7 @@ func run() error {
 		Tail:      workstream.NewTailer(*logPath),
 		Store:     store,
 		Subs:      subagents.NewReader(projects),
+		Usage:     usage.NewReader(projects),
 		Root:      projects,
 		ColdStart: *coldStart,
 		ColdAge:   24 * time.Hour,
@@ -85,6 +87,12 @@ func run() error {
 		col.SelfPanel = ""
 	}
 	defer col.Tail.Close()
+	// Claude Code caches the plan limits it shows in /usage in its config file.
+	planPath := filepath.Join(home, ".claude.json")
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		planPath = filepath.Join(dir, ".claude.json")
+	}
+	plan := &usage.PlanReader{Path: planPath}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -120,13 +128,14 @@ func run() error {
 		return enc.Encode(struct {
 			At       time.Time    `json:"at"`
 			Err      string       `json:"error,omitempty"`
+			Plan     usage.Plan   `json:"plan"`
 			Sessions []model.View `json:"sessions"`
-		}{time.Now(), col.Err(), store.Views(time.Now())})
+		}{time.Now(), col.Err(), plan.Get(time.Now()), store.Views(time.Now())})
 	}
 
 	snapshot := func() tui.Snapshot {
 		now := time.Now()
-		s := tui.Snapshot{Views: store.Views(now), CallsToday: store.CallsToday(now), LLM: sum != nil, Err: col.Err(), At: now}
+		s := tui.Snapshot{Views: store.Views(now), CallsToday: store.CallsToday(now), LLM: sum != nil, Err: col.Err(), At: now, Plan: plan.Get(now)}
 		if col.LedgerOpen() {
 			s.Effects = store.Effects()
 		}

@@ -88,6 +88,9 @@ func detailHead(v model.View, w int, now time.Time) []string {
 		state = i18n.T("waiting for you")
 	}
 	right := sDim.Render(sanitize.Truncate(v.Project+" · "+state, max(10, w/2)))
+	if c := ctxLong(v.Context); c != "" {
+		right += sDim.Render(" · ") + c
+	}
 	titleW := w - 4 - width(right)
 	top := " " + glyph + " " + sHeader.Render(sanitize.Truncate(v.Title, max(4, titleW)))
 	top += strings.Repeat(" ", max(1, w-width(top)-width(right))) + right
@@ -279,6 +282,9 @@ func (m Model) subLines(sa subagents.Agent, mission string, ev []transcript.Even
 	if sa.Running {
 		state = sAccent.Render(i18n.T("● working")) + sDim.Render(i18n.T(" for ")+dur(now.Sub(sa.Started)))
 	}
+	if c := ctxShort(sa.Context); c != "" {
+		state = c + sDim.Render(" · ") + state
+	}
 	head := pad + sCyan.Render("↳ "+sanitize.Truncate(sa.Type, 20)) + " "
 	descW := w - width(head) - width(state) - 2
 	line := head + sanitize.Truncate(sa.Description, max(4, descW))
@@ -453,9 +459,11 @@ func (m Model) detailFooter() string {
 	if !m.det.follow {
 		mode = sYellow.Render(i18n.T("❚❚ paused (f to follow)"))
 	}
-	parts := []string{mode, sDim.Render(keys)}
+	// The status goes before the key list so the width cut cannot hide it.
+	parts := []string{mode}
 	if m.status != "" {
 		parts = append(parts, sRed.Render(sanitize.Line(m.status, 80)))
 	}
+	parts = append(parts, sDim.Render(keys))
 	return lipgloss.NewStyle().MaxWidth(m.w).Render(" " + strings.Join(parts, sDim.Render("  ·  ")))
 }

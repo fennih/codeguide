@@ -16,6 +16,7 @@ import (
 
 	"github.com/fennih/codeguide/internal/toolfmt"
 	"github.com/fennih/codeguide/internal/transcript"
+	"github.com/fennih/codeguide/internal/usage"
 )
 
 const (
@@ -26,20 +27,21 @@ const (
 )
 
 type Agent struct {
-	ID          string    `json:"id"`
-	Type        string    `json:"type"`
-	Description string    `json:"description"`
-	Model       string    `json:"model,omitempty"`
-	Tool        string    `json:"tool,omitempty"`
-	Detail      string    `json:"detail,omitempty"`
-	Running     bool      `json:"running"`
-	Started     time.Time `json:"started"`
-	LastWrite   time.Time `json:"lastWrite"`
-	Calls       int       `json:"calls"`
-	ToolUseID   string    `json:"toolUseId,omitempty"` // the parent's Agent call that started it
-	Task        string    `json:"task,omitempty"`      // the brief it was given (first user message)
-	Result      string    `json:"result,omitempty"`    // its final report, once finished
-	Transcript  string    `json:"-"`
+	ID          string        `json:"id"`
+	Type        string        `json:"type"`
+	Description string        `json:"description"`
+	Model       string        `json:"model,omitempty"`
+	Tool        string        `json:"tool,omitempty"`
+	Detail      string        `json:"detail,omitempty"`
+	Running     bool          `json:"running"`
+	Started     time.Time     `json:"started"`
+	LastWrite   time.Time     `json:"lastWrite"`
+	Calls       int           `json:"calls"`
+	ToolUseID   string        `json:"toolUseId,omitempty"` // the parent's Agent call that started it
+	Task        string        `json:"task,omitempty"`      // the brief it was given (first user message)
+	Result      string        `json:"result,omitempty"`    // its final report, once finished
+	Context     usage.Context `json:"context"`
+	Transcript  string        `json:"-"`
 }
 
 type meta struct {
@@ -196,6 +198,9 @@ func (r *Reader) scanTail(path string, size int64, cwd string, a *Agent) (handed
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
 			data = data[i+1:]
 		}
+	}
+	if c, ok := usage.Last(data, true); ok {
+		a.Context = c
 	}
 	for _, raw := range bytes.Split(data, []byte{'\n'}) {
 		if len(raw) == 0 || !bytes.Contains(raw, []byte(`"assistant"`)) {

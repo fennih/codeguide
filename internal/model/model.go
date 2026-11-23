@@ -17,6 +17,7 @@ import (
 	"github.com/fennih/codeguide/internal/subagents"
 	"github.com/fennih/codeguide/internal/toolfmt"
 	"github.com/fennih/codeguide/internal/transcript"
+	"github.com/fennih/codeguide/internal/usage"
 	"github.com/fennih/codeguide/internal/workstream"
 )
 
@@ -166,6 +167,8 @@ type View struct {
 	History []Summary `json:"-"` // finished turns, oldest first
 	// SubMissions is a one-sentence mission per subagent id, when known.
 	SubMissions map[string]string `json:"subMissions,omitempty"`
+	// Context is how full the context window was at the latest request.
+	Context usage.Context `json:"context"`
 }
 
 // Goal is the best available one-line goal.
@@ -191,7 +194,8 @@ type Store struct {
 	looked    map[string]time.Time
 	history   map[string][]Summary
 	effects   []effectRow
-	missions  map[string]string   // subagent id -> mission
+	missions  map[string]string // subagent id -> mission
+	contexts  map[string]usage.Context
 	seen      map[string]struct{} // Feed record ids already applied
 	staleAge  time.Duration
 }
@@ -208,6 +212,7 @@ func NewStore(staleAge time.Duration) *Store {
 		looked:    map[string]time.Time{},
 		history:   map[string][]Summary{},
 		missions:  map[string]string{},
+		contexts:  map[string]usage.Context{},
 		staleAge:  staleAge,
 	}
 }
@@ -584,6 +589,13 @@ func (s *Store) SetSubTimeline(sessionID, agentID string, ev []transcript.Event)
 	s.subEvents[sessionID] = next
 }
 
+// SetContext stores how full a session's context window is.
+func (s *Store) SetContext(sessionID string, c usage.Context) {
+	s.mu.Lock()
+	s.contexts[sessionID] = c
+	s.mu.Unlock()
+}
+
 // TranscriptFor returns cmux's transcript path for a session.
 func (s *Store) TranscriptFor(sessionID string) string {
 	s.mu.Lock()
@@ -678,6 +690,7 @@ func (s *Store) Views(now time.Time) []View {
 		v.Timeline = s.timelines[a.SessionID]
 		v.SubEvents = s.subEvents[a.SessionID]
 		v.History = s.history[a.SessionID]
+		v.Context = s.contexts[a.SessionID]
 		if lk := s.looked[a.SessionID]; !lk.IsZero() {
 			v.Looked = lk
 			if t := s.tracks[a.SessionID]; t != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/fennih/codeguide/internal/subagents"
 	"github.com/fennih/codeguide/internal/toolfmt"
 	"github.com/fennih/codeguide/internal/transcript"
+	"github.com/fennih/codeguide/internal/usage"
 )
 
 var (
@@ -153,27 +154,27 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 			}
 		}
 	}
-	addWrapped(i18n.T("goal   "), sDim, v.Goal(), sBold, 2)
+	addWrapped(i18n.T("goal   "), sDim, v.Goal(), sBold, 3)
 	if v.Summary.Brief != "" {
-		addWrapped(i18n.T("why    "), sDim, v.Summary.Brief, lipgloss.NewStyle(), 3)
+		addWrapped(i18n.T("why    "), sDim, v.Summary.Brief, lipgloss.NewStyle(), 5)
 	}
 	if v.Pending != "" {
-		add(cell(sYellow.Render("▲ "), v.Pending, sYellow, inner))
+		addWrapped("▲ ", sYellow, v.Pending, sYellow, 3)
 	} else if v.Summary.NeedsUser && v.Summary.Ask != "" {
-		add(cell(sYellow.Render("▲ "), v.Summary.Ask, sYellow, inner))
+		addWrapped("▲ ", sYellow, v.Summary.Ask, sYellow, 3)
 	}
 	if v.News.Any() {
 		add(cell(sBlue.Render(i18n.T("news since ")+ago(v.Looked, now)+": "), newsText(v.News), sBlue, inner))
 	}
 	if v.Lane != model.LaneWorking && v.Summary.Outcome != "" {
-		add(cell(sGreen.Render("✓ "), v.Summary.Outcome, lipgloss.NewStyle(), inner))
+		addWrapped("✓ ", sGreen, v.Summary.Outcome, lipgloss.NewStyle(), 3)
 	}
 	if v.Lane == model.LaneWorking {
 		if v.Summary.Now != "" {
-			add(cell(sAccent.Render(i18n.T("now    ")), v.Summary.Now, lipgloss.NewStyle(), inner))
+			addWrapped(i18n.T("now    "), sAccent, v.Summary.Now, lipgloss.NewStyle(), 2)
 		}
 		if say := lastSay(v); say != "" {
-			add(cell(sDim.Render("▸ "), say, sIntent, inner))
+			addWrapped("▸ ", sDim, say, sIntent, 3)
 		}
 	}
 
@@ -223,10 +224,25 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 		state := sGreen.Render(" ✓")
 		if s.Running {
 			state = " " + sAccent.Render("●")
+			if c := ctxShort(s.Context); c != "" {
+				state = " " + c + state
+			}
 		}
 		head := sCyan.Render("↳ "+sanitize.Truncate(s.Type, 16)) + " "
-		line := head + sanitize.Truncate(subMission(v, s), max(4, inner-width(head)-width(state)))
-		add(lipgloss.NewStyle().MaxWidth(inner).Render(line + state))
+		mission := wrap(subMission(v, s), max(8, inner-width(head)-width(state)), 2)
+		if len(mission) == 0 {
+			mission = []string{""}
+		}
+		for i, l := range mission {
+			switch {
+			case i == 0 && len(mission) == 1:
+				add(lipgloss.NewStyle().MaxWidth(inner).Render(head + l + state))
+			case i == 0:
+				add(head + l)
+			default:
+				add(strings.Repeat(" ", width(head)) + l + state)
+			}
+		}
 		pad := "    "
 		switch {
 		case s.Running && s.Tool != "":
@@ -256,8 +272,11 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 	if running > 0 {
 		foot = append(foot, i18n.N(running, "1 subagent active", "%d subagents active"))
 	}
-	if len(foot) > 0 {
-		add(sDim.Render(strings.Join(foot, " · ")))
+	left := sDim.Render(strings.Join(foot, " · "))
+	if c := ctxLong(v.Context); c != "" && width(left)+width(c)+2 <= inner {
+		add(left + strings.Repeat(" ", inner-width(left)-width(c)) + c)
+	} else if len(foot) > 0 {
+		add(left)
 	}
 
 	bottom := border.Render("╰" + strings.Repeat("─", w-2) + "╯")
@@ -411,6 +430,11 @@ func row(v model.View, w int, selected bool, now time.Time) string {
 	restW := w - 4 - titleW - projW - ageW - 3
 	line := mark + sBold.Render(fit(v.Title, titleW)) + " " + sDim.Render(fit(v.Project, projW)) + " " +
 		sDim.Render(fit(ago(v.LastAt, now), ageW)) + " "
+	if c := ctxShort(v.Context); c != "" && restW > 40 {
+		const ctxW = 9
+		line += c + strings.Repeat(" ", max(1, ctxW-width(c)))
+		restW -= ctxW
+	}
 	if restW > 6 {
 		line += style.Render(sanitize.Truncate(text, restW))
 	}
@@ -427,4 +451,80 @@ func row(v model.View, w int, selected bool, now time.Time) string {
 func section(label string, w int) string {
 	l := sSection.Render("── " + label + " ")
 	return l + sFaint.Render(strings.Repeat("─", max(0, w-width(l))))
+}
+
+// tokens formats a token count as 950, 84k or 1.2M.
+func tokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		s := fmt.Sprintf("%.1f", float64(n)/1_000_000)
+		return strings.TrimSuffix(s, ".0") + "M"
+	case n >= 1000:
+		return fmt.Sprintf("%dk", n/1000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func levelStyle(pct int, severe bool) lipgloss.Style {
+	switch {
+	case severe || pct >= 85:
+		return sRed
+	case pct >= 60:
+		return sYellow
+	}
+	return sDim
+}
+
+// gauge draws a bar of n cells filled to pct.
+func gauge(pct, n int) string {
+	full := min(n, (pct*n+50)/100)
+	if pct > 0 && full == 0 {
+		full = 1
+	}
+	return strings.Repeat("▰", full) + strings.Repeat("▱", n-full)
+}
+
+// ctxLong reads "ctx ▰▰▱▱▱▱▱▱ 23% 46k/200k".
+func ctxLong(c usage.Context) string {
+	if !c.Known() {
+		return ""
+	}
+	p := c.Percent()
+	return levelStyle(p, false).Render(fmt.Sprintf("ctx %s %d%%", gauge(p, 8), p)) +
+		sDim.Render(" "+tokens(c.Tokens)+"/"+tokens(c.Window))
+}
+
+// ctxShort reads "ctx 23%".
+func ctxShort(c usage.Context) string {
+	if !c.Known() {
+		return ""
+	}
+	p := c.Percent()
+	return levelStyle(p, false).Render(fmt.Sprintf("ctx %d%%", p))
+}
+
+// planText lists plan limits, e.g. "5h 12% ↻18:00 · week 6% · Fable 8%".
+// A limit whose window already reset shows no percentage, since the cached
+// figure belongs to the previous window.
+func planText(p usage.Plan, now time.Time, withAge bool) string {
+	if len(p.Limits) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, l := range p.Limits {
+		if !l.ResetsAt.IsZero() && now.After(l.ResetsAt) {
+			parts = append(parts, sDim.Render(l.Label+" ↻"))
+			continue
+		}
+		s := levelStyle(l.Percent, l.Severe).Render(fmt.Sprintf("%s %d%%", l.Label, l.Percent))
+		if l.Label == "5h" && !l.ResetsAt.IsZero() {
+			s += sDim.Render(" ↻" + l.ResetsAt.Local().Format("15:04"))
+		}
+		parts = append(parts, s)
+	}
+	out := strings.Join(parts, sDim.Render(" · "))
+	if age := now.Sub(p.FetchedAt); withAge && !p.FetchedAt.IsZero() && age > 15*time.Minute {
+		out += sDim.Render(i18n.T(" (as of %s ago)", ago(p.FetchedAt, now)))
+	}
+	return out
 }

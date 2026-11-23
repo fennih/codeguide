@@ -15,6 +15,7 @@ import (
 	"github.com/fennih/codeguide/internal/subagents"
 	"github.com/fennih/codeguide/internal/summary"
 	"github.com/fennih/codeguide/internal/transcript"
+	"github.com/fennih/codeguide/internal/usage"
 	"github.com/fennih/codeguide/internal/workstream"
 )
 
@@ -49,6 +50,7 @@ type Collector struct {
 	Tail      *workstream.Tailer
 	Store     *model.Store
 	Subs      *subagents.Reader
+	Usage     *usage.Reader
 	Sum       *summary.Summarizer // nil when summaries are disabled
 	Root      string              // Claude projects directory; transcripts outside it are ignored
 	Narrate   bool
@@ -97,6 +99,7 @@ func (c *Collector) Init(ctx context.Context) error {
 	c.refreshCmux(ctx, now, true)
 	c.refreshSubagents(now, c.Store.Views(now))
 	c.refreshTimelines(now, c.Store.Views(now))
+	c.refreshContexts(c.Store.Views(now))
 	return nil
 }
 
@@ -165,6 +168,7 @@ func (c *Collector) Tick(ctx context.Context) {
 	c.refreshSubagents(now, c.Store.Views(now))
 	views := c.Store.Views(now)
 	c.refreshTimelines(now, views)
+	c.refreshContexts(views)
 	if c.Sum == nil {
 		return
 	}
@@ -329,6 +333,23 @@ func (c *Collector) refreshSubagents(now time.Time, views []model.View) {
 		}
 		c.Store.SetSubagents(v.SessionID, c.Subs.List(v.Transcript, v.Cwd, now))
 	}
+}
+
+// refreshContexts reads how full each open session's context window is. Only
+// transcripts that changed since the last tick are read again.
+func (c *Collector) refreshContexts(views []model.View) {
+	if c.Usage == nil {
+		return
+	}
+	keep := map[string]bool{}
+	for _, v := range views {
+		if v.Transcript == "" {
+			continue
+		}
+		keep[filepath.Clean(v.Transcript)] = true
+		c.Store.SetContext(v.SessionID, c.Usage.Session(v.Transcript))
+	}
+	c.Usage.Forget(keep)
 }
 
 // refreshTimelines follows transcripts of working sessions, sessions that

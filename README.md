@@ -1,6 +1,6 @@
 # codeguide
 
-A terminal dashboard for people who run many [Claude Code](https://www.anthropic.com/claude-code) sessions at once in [cmux](https://cmux.com). Each session gets a tile with what it is trying to do, why, what it is doing right now and whether it is waiting on you. Sessions that need you come first, and Enter opens a live, readable account of the session.
+A terminal dashboard for people who run many [Claude Code](https://www.anthropic.com/claude-code) sessions at once in [cmux](https://cmux.com). Each session gets a tile with what it is trying to do, why, what it is doing right now and whether it is waiting on you. Sessions that need you come first. Enter takes you to the session's tab, and Space opens a live, readable account of it.
 
 With six or ten agents running, tab titles stop helping. You cycle through tabs, scroll back to find the original request, and miss the permission prompt that has been waiting for twenty minutes. codeguide reads the logs that Claude Code and cmux already write and puts the answers on one screen. It only reads: it never types into a session.
 
@@ -59,11 +59,17 @@ Sessions are grouped into three lanes: waiting on you (a permission prompt, a pl
 
 ### Live detail
 
-Enter opens one session as a running story: your prompts, what the agent says between actions, every tool call with its outcome, errors with their first line, and edit diffs on demand. Subagents sit under the call that started them, with the brief they received and the report they returned. Scrolling up pauses the live view; `f` resumes it. `t` switches to an outline of past turns, one line per turn with its outcome.
+Space (or `v`) opens one session as a running story: your prompts, what the agent says between actions, every tool call with its outcome, errors with their first line, and edit diffs on demand. Subagents sit under the call that started them, with the brief they received and the report they returned. Scrolling up pauses the live view; `f` resumes it. `t` switches to an outline of past turns, one line per turn with its outcome.
 
 ### Catching up
 
 codeguide remembers when you last looked at each session: while its tab is in front, when you type a prompt in it, or when you open it from the board. Tiles then show what happened since ("news since 47m: 3 turns · 21 actions · 2 errors"), `r` lists only the sessions with news, and in the detail view `u` jumps to a "you were here" divider.
+
+### Context and plan usage
+
+Each tile shows how full the session's context window was at its latest request (`ctx ▰▰▱▱▱▱▱▱ 24% 240k/1M`), and each running subagent shows its own figure. Idle rows show only the percentage. The detail view puts it in its header and next to each subagent. codeguide guesses the window size from the model name: 1M for the Claude 5 Opus, Sonnet and Fable models, 200k for the rest, and 1M for any session whose requests have gone past 200k.
+
+The header shows your plan limits (the 5-hour session, the week, and any per-model weekly limit) as Claude Code last fetched them for `/usage`. Claude Code refreshes that cache on its own schedule. When the figures are more than 15 minutes old the header says how old they are, and it drops the percentage for any window that has already reset.
 
 ### External effects
 
@@ -121,8 +127,8 @@ Board:
 | Key | Action |
 | --- | --- |
 | `↑` `↓` / `j` `k` | select a session (the mouse wheel works too) |
-| `Enter`, or a click on the selected tile | open the live detail view |
-| `o` | jump to the session's cmux tab |
+| `Enter` / `o`, or a click on the selected tile | jump to the session's cmux tab |
+| `Space` / `v` | open the live detail view |
 | `r` | show only sessions with news |
 | `e` | external effects |
 | `/` | filter by title, project or goal |
@@ -174,7 +180,8 @@ codeguide refreshes every 0.7 seconds from local sources:
 - `~/.cmuxterm/workstream.jsonl`, the cmux Feed log, which records the Claude Code hooks cmux installs: prompts, tool calls, stops, pending questions and approvals;
 - `cmux sessions list --json` for the transcript path of each session;
 - the Claude Code transcripts in `~/.claude/projects/` and their `subagents/` folders, for what the agent says between actions, full tool calls, errors, diffs, subagent briefs and reports. It reads only working sessions, sessions that recently stopped to wait on you, and the one open in the detail view, starting from the last 3 MB of each file;
-- `cmux events` and `cmux identify`, to know which tab is in front.
+- `cmux events` and `cmux identify`, to know which tab is in front;
+- `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), at most every 10 seconds, for the cached plan usage only.
 
 The transcript format is internal to Claude Code and can change. When it cannot be read, tiles fall back to the Feed log.
 

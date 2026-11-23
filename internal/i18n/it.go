@@ -11,12 +11,13 @@ var italian = map[string]string{
 	"OLD (%d)":                    "VECCHIE (%d)",
 	"  + %d sessions idle for a while  (tab to show them)":                                                    "  + %d sessioni inattive da tempo  (tab per mostrarle)",
 	"  no Claude Code sessions found in cmux":                                                                 "  nessuna sessione Claude Code trovata in cmux",
-	" ↑↓/jk select   ⏎ or click opens the live detail   o jump to the cmux tab   / filter":                    " ↑↓/jk seleziona   ⏎ o click apre il dettaglio dal vivo   o vai al tab in cmux   / filtra",
+	" ↑↓/jk select   ⏎ or click jumps to the cmux tab   space/v opens the live detail   / filter":             " ↑↓/jk seleziona   ⏎ o click va al tab in cmux   spazio/v apre il dettaglio dal vivo   / filtra",
 	" r only sessions with news   e external effects   g by project   tab old   s redo goal/outcome   q quit": " r solo sessioni con novità   e effetti esterni   g per progetto   tab vecchie   s rigenera goal/esito   q esci",
 	" ▲ needs you   ● action   ✗ error   +N −M lines changed   ↳ subagent   ✓ outcome   • unread":             " ▲ serve te   ● azione   ✗ errore   +N −M righe modificate   ↳ subagent   ✓ esito   • non letto",
 	"%d working":                            "%d al lavoro",
 	"%d need you":                           "%d servono te",
 	"%d idle":                               "%d ferme",
+	" (as of %s ago)":                       " (dato di %s fa)",
 	"%d calls today":                        "%d chiamate oggi",
 	"filter: ":                              "filtro: ",
 	"by project":                            "per progetto",
@@ -24,7 +25,7 @@ var italian = map[string]string{
 	"1 session with news · r to see it":     "1 sessione con novità · r per vederla",
 	"%d sessions with news · r to see them": "%d sessioni con novità · r per vederle",
 	"summaries: ":                           "riassunti: ",
-	"⏎ detail · o jump to tab · / filter · g project · tab old · ? help · q quit": "⏎ dettaglio · o vai al tab · / filtra · g progetto · tab vecchie · ? aiuto · q esci",
+	"⏎ jump to tab · space detail · / filter · g project · tab old · ? help · q quit": "⏎ vai al tab · spazio dettaglio · / filtra · g progetto · tab vecchie · ? aiuto · q esci",
 
 	// tiles
 	"now":                 "ora",

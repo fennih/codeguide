@@ -111,6 +111,11 @@ func (c Client) Agents(ctx context.Context) ([]Agent, error) {
 			if a.Kind != "claude" || !ValidID(a.SessionID) {
 				continue
 			}
+			// The tab outlives Claude: after an exit the surface keeps running
+			// (a shell, or another program) and its latest agent reads "ended".
+			if a.State == "ended" {
+				break
+			}
 			t, _ := time.Parse(time.RFC3339, a.LastActivity)
 			ag := Agent{
 				SessionID: a.SessionID, State: a.State, LastActivity: t,
