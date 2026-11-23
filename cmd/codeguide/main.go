@@ -18,6 +18,7 @@ import (
 
 	"github.com/fennih/codeguide/internal/app"
 	"github.com/fennih/codeguide/internal/cmux"
+	"github.com/fennih/codeguide/internal/i18n"
 	"github.com/fennih/codeguide/internal/model"
 	"github.com/fennih/codeguide/internal/subagents"
 	"github.com/fennih/codeguide/internal/summary"
@@ -41,7 +42,7 @@ func run() error {
 		once       = flag.Bool("once", false, "print one JSON snapshot and exit (no model calls)")
 		frameSize  = flag.String("frame", "", "print one rendered frame of WIDTHxHEIGHT and exit (no model calls)")
 		noLLM      = flag.Bool("no-llm", false, "disable goal/outcome summaries and live narration")
-		noNarrate  = flag.Bool("no-narrate", false, "disable the live \"ora:\" narration of working sessions")
+		noNarrate  = flag.Bool("no-narrate", false, "disable the live \"now\" narration of working sessions")
 		nowPerHour = flag.Int("narrate-per-hour", 40, "cap on live narration calls per hour")
 		noMouse    = flag.Bool("no-mouse", false, "do not capture the mouse")
 		detailID   = flag.String("detail", "", "with --frame: render the detail view of this session id")
@@ -54,8 +55,13 @@ func run() error {
 		coldStart  = flag.Int("cold-start", 20, "recent sessions to summarize at startup")
 		stateDir   = flag.String("state-dir", filepath.Join(home, ".local", "state", "codeguide"), "cache directory")
 		logPath    = flag.String("workstream", filepath.Join(home, ".cmuxterm", "workstream.jsonl"), "cmux Feed log")
+		lang       = flag.String("lang", "en", "interface language: en or it")
 	)
 	flag.Parse()
+	if *lang != "en" && *lang != "it" {
+		return fmt.Errorf("--lang: unsupported language %q (use en or it)", *lang)
+	}
+	i18n.Set(*lang)
 
 	cbin, err := resolveCmux(*cmuxBin)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/fennih/codeguide/internal/i18n"
 	"github.com/fennih/codeguide/internal/model"
 	"github.com/fennih/codeguide/internal/sanitize"
 	"github.com/fennih/codeguide/internal/subagents"
@@ -26,13 +27,13 @@ type detail struct {
 	// fromLedger returns to the effects view on close.
 	fromLedger bool
 	// lookedAt is when the user last looked before opening; events after it
-	// are new and get an "eri qui" divider.
+	// are new and get a "you were here" divider.
 	lookedAt time.Time
 }
 
 const (
 	tsW       = 8  // "15:04:05"
-	verbW     = 11 // widest verb, "Carica tool"
+	verbW     = 11 // widest verb, "Loads tools"
 	diffShown = 12
 	subShown  = 6
 )
@@ -40,7 +41,7 @@ const (
 func (m Model) detailView(now time.Time) string {
 	v, ok := m.viewByID(m.det.sid)
 	if !ok {
-		out := []string{m.header(now), "", sDim.Render("  la sessione non è più aperta in cmux  (esc per tornare)")}
+		out := []string{m.header(now), "", sDim.Render(i18n.T("  the session is no longer open in cmux  (esc to go back)"))}
 		for len(out) < m.h-1 {
 			out = append(out, "")
 		}
@@ -77,14 +78,14 @@ func (m Model) viewByID(id string) (model.View, bool) {
 
 func detailHead(v model.View, w int, now time.Time) []string {
 	glyph := sDim.Render("·")
-	state := "ferma da " + ago(v.LastAt, now)
+	state := i18n.T("idle for ") + ago(v.LastAt, now)
 	switch v.Lane {
 	case model.LaneWorking:
 		glyph = sAccent.Render(spin(now))
-		state = "al lavoro da " + dur(now.Sub(v.TurnStart))
+		state = i18n.T("working for ") + dur(now.Sub(v.TurnStart))
 	case model.LaneNeedsYou:
 		glyph = sYellow.Render("▲")
-		state = "aspetta te"
+		state = i18n.T("waiting for you")
 	}
 	right := sDim.Render(sanitize.Truncate(v.Project+" · "+state, max(10, w/2)))
 	titleW := w - 4 - width(right)
@@ -96,7 +97,7 @@ func detailHead(v model.View, w int, now time.Time) []string {
 		if text == "" {
 			return
 		}
-		prefix := " " + st.Render(fmt.Sprintf("%-10s", name)) + " "
+		prefix := " " + st.Render(fit(i18n.T(name), 10)) + " "
 		for i, l := range wrap(text, w-width(prefix), maxLines) {
 			if i > 0 {
 				prefix = strings.Repeat(" ", 12)
@@ -104,25 +105,25 @@ func detailHead(v model.View, w int, now time.Time) []string {
 			lines = append(lines, prefix+style.Render(l))
 		}
 	}
-	label("Obiettivo", sDim, v.Goal(), sBold, 2)
-	label("Contesto", sDim, v.Summary.Brief, lipgloss.NewStyle(), 4)
+	label("Goal", sDim, v.Goal(), sBold, 2)
+	label("Context", sDim, v.Summary.Brief, lipgloss.NewStyle(), 4)
 	if v.Lane == model.LaneWorking {
-		label("Ora", sAccent, v.Summary.Now, lipgloss.NewStyle(), 2)
+		label("Now", sAccent, v.Summary.Now, lipgloss.NewStyle(), 2)
 	}
 	switch {
 	case v.Pending != "":
-		label("Serve te", sYellow, v.Pending, sYellow, 3)
+		label("Needs you", sYellow, v.Pending, sYellow, 3)
 	case v.Summary.NeedsUser && v.Summary.Ask != "":
-		label("Serve te", sYellow, v.Summary.Ask, sYellow, 3)
+		label("Needs you", sYellow, v.Summary.Ask, sYellow, 3)
 	}
 	if v.Lane != model.LaneWorking {
-		label("Esito", sGreen, v.Summary.Outcome, lipgloss.NewStyle(), 2)
+		label("Outcome", sGreen, v.Summary.Outcome, lipgloss.NewStyle(), 2)
 	}
 	return append(lines, sFaint.Render(strings.Repeat("─", w)))
 }
 
 // detailLines renders the whole body; the caller picks the window. div is
-// the line index of the "eri qui" divider, or -1.
+// the line index of the "you were here" divider, or -1.
 func (m Model) detailLines(v model.View, now time.Time) (lines []string, div int) {
 	if m.det.turns {
 		return turnLines(v, m.w, m.det.lookedAt)
@@ -155,7 +156,7 @@ func (m Model) detailLines(v model.View, now time.Time) (lines []string, div int
 		ts := sFaint.Render(e.At.Local().Format("15:04:05"))
 		switch e.Kind {
 		case transcript.Prompt:
-			out = append(out, "", section("tu · "+e.At.Local().Format("15:04"), w))
+			out = append(out, "", section(i18n.T("you · ")+e.At.Local().Format("15:04"), w))
 			for _, l := range wrap(e.Text, w-4, 6) {
 				out = append(out, "  "+sBold.Render(l))
 			}
@@ -165,9 +166,9 @@ func (m Model) detailLines(v model.View, now time.Time) (lines []string, div int
 		case transcript.End:
 			out = append(out, textBlock(ts, sGreen.Render("■"), e.Text, lipgloss.NewStyle(), textW, 10)...)
 		case transcript.Interrupt:
-			out = append(out, ts+"  "+sYellow.Render("◼ interrotto da te"))
+			out = append(out, ts+"  "+sYellow.Render(i18n.T("◼ interrupted by you")))
 		case transcript.Compact:
-			out = append(out, "", sFaint.Render("  ── contesto compattato ──"), "")
+			out = append(out, "", sFaint.Render(i18n.T("  ── context compacted ──")), "")
 		case transcript.Tool:
 			glyph := sGreen.Render("✓")
 			switch {
@@ -197,7 +198,7 @@ func (m Model) detailLines(v model.View, now time.Time) (lines []string, div int
 			if m.det.diffs && len(e.Diff) > 0 {
 				for j, l := range e.Diff {
 					if j == diffShown {
-						out = append(out, pad+sFaint.Render(fmt.Sprintf("  … altre %d righe", len(e.Diff)-diffShown)))
+						out = append(out, pad+sFaint.Render(i18n.T("  … %d more lines", len(e.Diff)-diffShown)))
 						break
 					}
 					st := sGreen
@@ -216,7 +217,7 @@ func (m Model) detailLines(v model.View, now time.Time) (lines []string, div int
 }
 
 func lookedDivider(at time.Time, w int) string {
-	l := sBlue.Render("── eri qui · " + stamp(at) + " ")
+	l := sBlue.Render(i18n.T("── you were here · ") + stamp(at) + " ")
 	return l + sBlue.Render(strings.Repeat("─", max(0, w-width(l))))
 }
 
@@ -227,15 +228,15 @@ func stamp(t time.Time) string {
 	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
 		return t.Format("15:04")
 	}
-	return t.Format("02/01 15:04")
+	return t.Format(i18n.T("Jan 02 15:04"))
 }
 
 // turnLines is the outline of finished turns from the summary cache.
 func turnLines(v model.View, w int, lookedAt time.Time) ([]string, int) {
-	out := []string{sSection.Render("  filo dei turni") + sDim.Render("  (t per tornare al racconto)"), ""}
+	out := []string{sSection.Render(i18n.T("  turn outline")) + sDim.Render(i18n.T("  (t to go back to the story)")), ""}
 	div := -1
 	if len(v.History) == 0 {
-		out = append(out, sDim.Render("  nessun turno riassunto per questa sessione"))
+		out = append(out, sDim.Render(i18n.T("  no summarized turns for this session")))
 	}
 	pad := strings.Repeat(" ", 14)
 	for i, h := range v.History {
@@ -246,7 +247,7 @@ func turnLines(v model.View, w int, lookedAt time.Time) ([]string, int) {
 		head := " " + sFaint.Render(fmt.Sprintf("%-11s", stamp(h.At))) + " " + sGreen.Render("✓") + " "
 		outcome := h.Outcome
 		if outcome == "" {
-			outcome = "(nessun esito)"
+			outcome = i18n.T("(no outcome)")
 		}
 		out = append(out, head+sanitize.Truncate(outcome, w-width(head)))
 		if h.Goal != "" {
@@ -266,7 +267,7 @@ func turnLines(v model.View, w int, lookedAt time.Time) ([]string, int) {
 			out = append(out, lookedDivider(lookedAt, w))
 		}
 		head := " " + sFaint.Render(fmt.Sprintf("%-11s", stamp(v.TurnStart))) + " " + sAccent.Render("●") + " "
-		out = append(out, head+sanitize.Truncate("in corso: "+v.Goal(), w-width(head)))
+		out = append(out, head+sanitize.Truncate(i18n.T("in progress: ")+v.Goal(), w-width(head)))
 	}
 	return out, div
 }
@@ -274,9 +275,9 @@ func turnLines(v model.View, w int, lookedAt time.Time) ([]string, int) {
 // subLines nests a subagent under the Agent call that started it.
 func (m Model) subLines(sa subagents.Agent, mission string, ev []transcript.Event, w int, now time.Time) []string {
 	pad := strings.Repeat(" ", tsW+4)
-	state := sGreen.Render("✓ finito")
+	state := sGreen.Render(i18n.T("✓ done"))
 	if sa.Running {
-		state = sAccent.Render("● al lavoro") + sDim.Render(" da "+dur(now.Sub(sa.Started)))
+		state = sAccent.Render(i18n.T("● working")) + sDim.Render(i18n.T(" for ")+dur(now.Sub(sa.Started)))
 	}
 	head := pad + sCyan.Render("↳ "+sanitize.Truncate(sa.Type, 20)) + " "
 	descW := w - width(head) - width(state) - 2
@@ -289,7 +290,7 @@ func (m Model) subLines(sa subagents.Agent, mission string, ev []transcript.Even
 		if text == "" {
 			return
 		}
-		prefix := pad + "  " + st.Render(fmt.Sprintf("%-8s", label)) + " "
+		prefix := pad + "  " + st.Render(fit(i18n.T(label), 8)) + " "
 		cont := strings.Repeat(" ", width(prefix))
 		for i, l := range wrap(text, w-width(prefix), maxLines) {
 			if i == 0 {
@@ -304,11 +305,11 @@ func (m Model) subLines(sa subagents.Agent, mission string, ev []transcript.Even
 		long = 30
 	}
 	if mission != "" && mission != sa.Description {
-		block("missione", sCyan, mission, sBold, 2)
+		block("mission", sCyan, mission, sBold, 2)
 	}
-	block("compito", sDim, sa.Task, sDim, long)
+	block("task", sDim, sa.Task, sDim, long)
 	if !sa.Running {
-		block("esito", sGreen, sa.Result, lipgloss.NewStyle(), long)
+		block("result", sGreen, sa.Result, lipgloss.NewStyle(), long)
 	}
 
 	var tools []transcript.Event
@@ -323,12 +324,12 @@ func (m Model) subLines(sa subagents.Agent, mission string, ev []transcript.Even
 	}
 	if !sa.Running && !m.det.subs {
 		if len(tools) > 0 {
-			out = append(out, pad+sFaint.Render(fmt.Sprintf("  %d azioni  (x per vederle, con compito ed esito per intero)", len(tools))))
+			out = append(out, pad+sFaint.Render(i18n.T("  %d actions  (x to see them, with full task and result)", len(tools))))
 		}
 		return out
 	}
 	if len(tools) > subShown {
-		out = append(out, pad+sFaint.Render(fmt.Sprintf("  … %d azioni prima", len(tools)-subShown)))
+		out = append(out, pad+sFaint.Render(i18n.T("  … %d earlier actions", len(tools)-subShown)))
 		tools = tools[len(tools)-subShown:]
 	}
 	inner := pad + "  "
@@ -366,7 +367,7 @@ func slowTool(name string) bool {
 
 // feedLines is the fallback when the transcript cannot be read.
 func feedLines(v model.View, w int) []string {
-	out := []string{sDim.Render("  transcript non disponibile: mostro le ultime azioni dal Feed di cmux"), ""}
+	out := []string{sDim.Render(i18n.T("  transcript unavailable: showing the latest actions from the cmux Feed")), ""}
 	if v.Prompt != "" {
 		for _, l := range wrap(v.Prompt, w-4, 4) {
 			out = append(out, "  "+sBold.Render(l))
@@ -447,10 +448,10 @@ func wrap(s string, w, maxLines int) []string {
 }
 
 func (m Model) detailFooter() string {
-	keys := "⏎ vai al tab · u eri qui · t filo · d diff · x subagent · f segui · n/p sessione · esc elenco"
-	mode := sAccent.Render("● dal vivo")
+	keys := i18n.T("⏎ jump to tab · u where you were · t outline · d diffs · x subagents · f follow · n/p session · esc list")
+	mode := sAccent.Render(i18n.T("● live"))
 	if !m.det.follow {
-		mode = sYellow.Render("❚❚ in pausa (f per seguire)")
+		mode = sYellow.Render(i18n.T("❚❚ paused (f to follow)"))
 	}
 	parts := []string{mode, sDim.Render(keys)}
 	if m.status != "" {

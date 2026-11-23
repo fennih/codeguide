@@ -348,7 +348,7 @@ func (f *Follower) result(b block, at time.Time, tur json.RawMessage) {
 	}
 	if b.IsError {
 		e.ErrLine = errLine(resultText(b.Content))
-	} else if e.Sys == "Jira" && e.Act == "crea" {
+	} else if e.Sys == "Jira" && e.Act == "create" {
 		if key := effects.IssueKey(resultText(b.Content)); key != "" && !strings.HasPrefix(e.Target, key) {
 			e.Target = strings.TrimSpace(key + " " + e.Target)
 		}

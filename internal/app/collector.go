@@ -500,7 +500,7 @@ func describe(e transcript.Event) string {
 		s += " (+" + strconv.Itoa(e.Plus) + " -" + strconv.Itoa(e.Minus) + ")"
 	}
 	if e.Error {
-		s += " [errore: " + e.ErrLine + "]"
+		s += " [error: " + e.ErrLine + "]"
 	}
 	return s
 }

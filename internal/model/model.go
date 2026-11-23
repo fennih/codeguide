@@ -12,6 +12,7 @@ import (
 
 	"github.com/fennih/codeguide/internal/cmux"
 	"github.com/fennih/codeguide/internal/effects"
+	"github.com/fennih/codeguide/internal/i18n"
 	"github.com/fennih/codeguide/internal/sanitize"
 	"github.com/fennih/codeguide/internal/subagents"
 	"github.com/fennih/codeguide/internal/toolfmt"
@@ -734,14 +735,14 @@ func pendingText(r *workstream.Record, cwd string) string {
 			if d == "" {
 				d = toolfmt.DetailJSON(p.ToolName, p.ToolInputJSON, cwd)
 			}
-			return sanitize.Line("permesso: "+toolfmt.ShortTool(p.ToolName)+" "+d, 200)
+			return sanitize.Line(i18n.T("permission: ")+toolfmt.ShortTool(p.ToolName)+" "+d, 200)
 		}
 	case "exitPlan":
 		s := r.Context.PlanSummary
 		if s == "" {
-			s = "piano pronto da approvare"
+			s = i18n.T("plan ready for approval")
 		}
-		return sanitize.Line("piano: "+s, 200)
+		return sanitize.Line(i18n.T("plan: ")+s, 200)
 	case "question":
 		var q struct {
 			Questions []struct {
@@ -752,9 +753,9 @@ func pendingText(r *workstream.Record, cwd string) string {
 			_ = json.Unmarshal(r.Payload.Question, &q)
 		}
 		if len(q.Questions) > 0 {
-			return sanitize.Line("domanda: "+q.Questions[0].Question, 200)
+			return sanitize.Line(i18n.T("question: ")+q.Questions[0].Question, 200)
 		}
-		return "domanda in attesa"
+		return i18n.T("question pending")
 	}
 	return strings.TrimSpace(r.Kind)
 }

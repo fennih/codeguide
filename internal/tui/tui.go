@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/fennih/codeguide/internal/cmux"
+	"github.com/fennih/codeguide/internal/i18n"
 	"github.com/fennih/codeguide/internal/model"
 	"github.com/fennih/codeguide/internal/sanitize"
 	"github.com/fennih/codeguide/internal/summary"
@@ -148,7 +149,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, animate()
 	case focusDone:
 		if msg.err != nil {
-			m.status = sanitize.Line("salto non riuscito: "+msg.err.Error(), 120)
+			m.status = sanitize.Line(i18n.T("jump failed: ")+msg.err.Error(), 120)
 		}
 	case tea.MouseMsg:
 		return m.mouse(msg)
@@ -232,7 +233,7 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		if idx >= 0 && m.opt.Resummarize != nil {
 			m.opt.Resummarize(items[idx].SessionID)
-			m.status = "riassunto richiesto"
+			m.status = i18n.T("summary requested")
 		}
 	case "?":
 		m.help = !m.help
@@ -292,7 +293,7 @@ func (m Model) detailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		if m.opt.Resummarize != nil {
 			m.opt.Resummarize(m.det.sid)
-			m.status = "riassunto richiesto"
+			m.status = i18n.T("summary requested")
 		}
 	}
 	return m, nil
@@ -413,7 +414,7 @@ func (m Model) items() []model.View {
 
 func (m Model) View() string {
 	if m.w < 30 || m.h < 8 {
-		return "codeguide: finestra troppo piccola"
+		return i18n.T("codeguide: window too small")
 	}
 	now := time.Now()
 	if m.inDetail {
@@ -456,9 +457,9 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 		if len(vs) == 0 {
 			continue
 		}
-		label := "SERVE TE"
+		label := i18n.T("NEEDS YOU")
 		if lane == model.LaneWorking {
-			label = "AL LAVORO"
+			label = i18n.T("WORKING")
 		}
 		lines = append(lines, section(fmt.Sprintf("%s (%d)", label, len(vs)), m.w))
 		for i := 0; i < len(vs); i += cols {
@@ -478,7 +479,7 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 		}
 	}
 	if vs := byLane[model.LaneIdle]; len(vs) > 0 {
-		lines = append(lines, section(fmt.Sprintf("FERME (%d)", len(vs)), m.w))
+		lines = append(lines, section(i18n.T("IDLE (%d)", len(vs)), m.w))
 		for _, v := range vs {
 			start := len(lines)
 			lines = append(lines, row(v, m.w, v.SessionID == selID, now))
@@ -494,7 +495,7 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 	}
 	if m.showOld {
 		if vs := byLane[model.LaneStale]; len(vs) > 0 {
-			lines = append(lines, section(fmt.Sprintf("VECCHIE (%d)", len(vs)), m.w))
+			lines = append(lines, section(i18n.T("OLD (%d)", len(vs)), m.w))
 			for _, v := range vs {
 				start := len(lines)
 				lines = append(lines, row(v, m.w, v.SessionID == selID, now))
@@ -503,10 +504,10 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 			}
 		}
 	} else if nOld > 0 {
-		lines = append(lines, sDim.Render(fmt.Sprintf("  + %d sessioni inattive da tempo  (tab per mostrarle)", nOld)))
+		lines = append(lines, sDim.Render(i18n.T("  + %d sessions idle for a while  (tab to show them)", nOld)))
 	}
 	if len(items) == 0 {
-		lines = append(lines, "", sDim.Render("  nessuna sessione Claude Code trovata in cmux"))
+		lines = append(lines, "", sDim.Render(i18n.T("  no Claude Code sessions found in cmux")))
 	}
 
 	bodyH := m.h - 2
@@ -537,9 +538,9 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 	out = append(out, visible...)
 	if m.help {
 		out = append(out,
-			sDim.Render(" ↑↓/jk seleziona   ⏎ o click apre il dettaglio dal vivo   o vai al tab in cmux   / filtra"),
-			sDim.Render(" r solo sessioni con novità   e effetti esterni   g per progetto   tab vecchie   s rigenera goal/esito   q esci"),
-			sDim.Render(" ▲ serve te   ● azione   ✗ errore   +N −M righe modificate   ↳ subagent   ✓ esito   • non letto"),
+			sDim.Render(i18n.T(" ↑↓/jk select   ⏎ or click opens the live detail   o jump to the cmux tab   / filter")),
+			sDim.Render(i18n.T(" r only sessions with news   e external effects   g by project   tab old   s redo goal/outcome   q quit")),
+			sDim.Render(i18n.T(" ▲ needs you   ● action   ✗ error   +N −M lines changed   ↳ subagent   ✓ outcome   • unread")),
 		)
 	}
 	out = append(out, m.footer())
@@ -559,10 +560,10 @@ func (m Model) header(now time.Time) string {
 		}
 	}
 	left := sHeader.Render("codeguide") + "  " +
-		sAccent.Render(fmt.Sprintf("%d al lavoro", nWork)) + sDim.Render(" · ") +
-		sYellow.Render(fmt.Sprintf("%d servono te", nYou)) + sDim.Render(" · ") +
-		sDim.Render(fmt.Sprintf("%d ferme", nIdle))
-	right := fmt.Sprintf("%d chiamate oggi", m.snap.CallsToday)
+		sAccent.Render(i18n.T("%d working", nWork)) + sDim.Render(" · ") +
+		sYellow.Render(i18n.T("%d need you", nYou)) + sDim.Render(" · ") +
+		sDim.Render(i18n.T("%d idle", nIdle))
+	right := i18n.T("%d calls today", m.snap.CallsToday)
 	if m.snap.LLM {
 		right += fmt.Sprintf(" · haiku %d ($%.3f)", m.snap.Stats.Calls, m.snap.Stats.CostUSD)
 		if m.snap.Stats.Queued > 0 {
@@ -581,12 +582,12 @@ func (m Model) header(now time.Time) string {
 func (m Model) footer() string {
 	var parts []string
 	if m.editing {
-		parts = append(parts, sAccent.Render("filtro: ")+m.filter+"▏")
+		parts = append(parts, sAccent.Render(i18n.T("filter: "))+m.filter+"▏")
 	} else if m.filter != "" {
-		parts = append(parts, sAccent.Render("filtro: ")+m.filter)
+		parts = append(parts, sAccent.Render(i18n.T("filter: "))+m.filter)
 	}
 	if m.byProj {
-		parts = append(parts, sBlue.Render("per progetto"))
+		parts = append(parts, sBlue.Render(i18n.T("by project")))
 	}
 	nNews := 0
 	for _, v := range m.snap.Views {
@@ -596,23 +597,23 @@ func (m Model) footer() string {
 	}
 	switch {
 	case m.newsOnly:
-		parts = append(parts, sBlue.Render("solo sessioni con novità (r per tutte)"))
+		parts = append(parts, sBlue.Render(i18n.T("only sessions with news (r for all)")))
 	case nNews == 1:
-		parts = append(parts, sBlue.Render("1 sessione con novità · r per vederla"))
+		parts = append(parts, sBlue.Render(i18n.T("1 session with news · r to see it")))
 	case nNews > 1:
-		parts = append(parts, sBlue.Render(fmt.Sprintf("%d sessioni con novità · r per vederle", nNews)))
+		parts = append(parts, sBlue.Render(i18n.T("%d sessions with news · r to see them", nNews)))
 	}
 	msg := m.status
 	if m.snap.Err != "" {
 		msg = m.snap.Err
 	} else if m.snap.Stats.LastErr != "" {
-		msg = "riassunti: " + m.snap.Stats.LastErr
+		msg = i18n.T("summaries: ") + m.snap.Stats.LastErr
 	}
 	if msg != "" {
 		parts = append(parts, sRed.Render(sanitize.Line(msg, 100)))
 	}
 	if msg == "" {
-		parts = append(parts, sDim.Render("⏎ dettaglio · o vai al tab · / filtra · g progetto · tab vecchie · ? aiuto · q esci"))
+		parts = append(parts, sDim.Render(i18n.T("⏎ detail · o jump to tab · / filter · g project · tab old · ? help · q quit")))
 	}
 	return lipgloss.NewStyle().MaxWidth(m.w).Render(" " + strings.Join(parts, sDim.Render("  ·  ")))
 }

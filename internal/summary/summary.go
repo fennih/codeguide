@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fennih/codeguide/internal/i18n"
 	"github.com/fennih/codeguide/internal/model"
 	"github.com/fennih/codeguide/internal/sanitize"
 	"github.com/fennih/codeguide/internal/statefile"
@@ -282,7 +283,7 @@ func (s *Summarizer) handle(ctx context.Context, j Job) {
 	}()
 	if !s.allow(j.Mode) {
 		if j.Mode != ModeNow {
-			s.setErr("limite orario raggiunto")
+			s.setErr(i18n.T("hourly limit reached"))
 		}
 		return
 	}
@@ -469,7 +470,7 @@ func (s *Summarizer) call(ctx context.Context, j Job) (model.Summary, float64, e
 	}
 	var r cliResult
 	if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
-		return model.Summary{}, 0, fmt.Errorf("claude -p: output non JSON")
+		return model.Summary{}, 0, fmt.Errorf("claude -p: output is not JSON")
 	}
 	if r.IsError || r.StructuredOutput == nil {
 		return model.Summary{}, r.TotalCostUSD, errors.New("claude -p: " + sanitize.Line(r.Result, 120))

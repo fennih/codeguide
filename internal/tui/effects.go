@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/fennih/codeguide/internal/i18n"
 	"github.com/fennih/codeguide/internal/model"
 	"github.com/fennih/codeguide/internal/sanitize"
 )
@@ -20,7 +21,7 @@ func (m Model) ledgerRows() []model.EffectRow {
 	}
 	var out []model.EffectRow
 	for _, r := range m.snap.Effects {
-		hay := strings.ToLower(r.Sys + " " + r.Act + " " + r.Target + " " + r.Session + " " + r.Project)
+		hay := strings.ToLower(r.Sys + " " + i18n.T(r.Act) + " " + r.Target + " " + r.Session + " " + r.Project)
 		if strings.Contains(hay, f) {
 			out = append(out, r)
 		}
@@ -60,7 +61,7 @@ func (m Model) ledgerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.ledSel >= 0 && m.ledSel < len(rows) {
 			r := rows[m.ledSel]
 			if !r.Live {
-				m.status = "sessione chiusa: nessun dettaglio"
+				m.status = i18n.T("session closed: no detail")
 				return m, nil
 			}
 			m = m.openDetail(r.SessionID)
@@ -92,12 +93,12 @@ func dayLabel(t time.Time, now time.Time) string {
 	y2, m2, d2 := now.Date()
 	switch {
 	case y1 == y2 && m1 == m2 && d1 == d2:
-		return "oggi"
+		return i18n.T("today")
 	case y1 == y2 && m1 == m2 && d1 == d2-1:
-		return "ieri"
+		return i18n.T("yesterday")
 	}
-	days := []string{"dom", "lun", "mar", "mer", "gio", "ven", "sab"}
-	return days[t.Weekday()] + " " + t.Format("02/01")
+	days := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+	return i18n.T(days[t.Weekday()]) + " " + t.Format(i18n.T("Jan 02"))
 }
 
 func (m Model) ledgerView(now time.Time) string {
@@ -128,16 +129,16 @@ func (m Model) ledgerView(now time.Time) string {
 	for _, s := range syss {
 		parts = append(parts, sysStyle(s).Render(fmt.Sprintf("%s %d", s, tot[s])))
 	}
-	parts = append(parts, sYellow.Render(fmt.Sprintf("non classificati %d", unknown)))
+	parts = append(parts, sYellow.Render(i18n.T("unclassified %d", unknown)))
 	span := ""
 	if n := len(rows); n > 0 {
-		span = fmt.Sprintf(" · dal %s", rows[n-1].At.Local().Format("02/01 15:04"))
+		span = i18n.T(" · since %s", rows[n-1].At.Local().Format(i18n.T("Jan 02 15:04")))
 	}
 	head := []string{
 		m.header(now),
-		" " + sHeader.Render("Effetti esterni") + sDim.Render(fmt.Sprintf("  %d%s", len(rows), span)),
+		" " + sHeader.Render(i18n.T("External effects")) + sDim.Render(fmt.Sprintf("  %d%s", len(rows), span)),
 		lipgloss.NewStyle().MaxWidth(w).Render(" " + strings.Join(parts, sDim.Render(" · "))),
-		sDim.Render(sanitize.Truncate("  elenco minimo: script e comandi non riconosciuti possono scrivere senza comparire qui", w)),
+		sDim.Render(sanitize.Truncate(i18n.T("  a floor, not a full list: scripts and unrecognized commands can write without showing up here"), w)),
 	}
 
 	sessW := min(34, max(14, w/4))
@@ -155,7 +156,7 @@ func (m Model) ledgerView(now time.Time) string {
 		lines = append(lines, ledgerLine(r, w, sessW, i == m.ledSel))
 	}
 	if len(rows) == 0 {
-		lines = append(lines, "", sDim.Render("  nessun effetto esterno nel periodo caricato"))
+		lines = append(lines, "", sDim.Render(i18n.T("  no external effects in the loaded period")))
 	}
 
 	bodyH := max(1, m.h-len(head)-1)
@@ -180,9 +181,9 @@ func ledgerLine(r model.EffectRow, w, sessW int, selected bool) string {
 	case 'e':
 		status = sRed.Render("✗")
 	}
-	act := sDim.Render(fit(r.Act, 12))
+	act := sDim.Render(fit(i18n.T(r.Act), 12))
 	if r.Unknown {
-		act = sYellow.Render(fit("non classif.", 12))
+		act = sYellow.Render(fit(i18n.T("unclassified"), 12))
 	}
 	left := "  " + sFaint.Render(r.At.Local().Format("15:04")) + "  " + sysStyle(r.Sys).Render(fit(r.Sys, 11)) + " " + act + " "
 	sess := r.Project
@@ -197,7 +198,7 @@ func ledgerLine(r model.EffectRow, w, sessW int, selected bool) string {
 	target := r.Target
 	tStyle := lipgloss.NewStyle()
 	if target == "" {
-		target, tStyle = "(dettagli non disponibili)", sFaint
+		target, tStyle = i18n.T("(no details available)"), sFaint
 	}
 	line := left + tStyle.Render(fit(target, max(4, tw))) + "  " + sessStyled + " " + status
 	line = lipgloss.NewStyle().MaxWidth(w).Render(line)
@@ -213,13 +214,13 @@ func ledgerLine(r model.EffectRow, w, sessW int, selected bool) string {
 func (m Model) ledgerFooter() string {
 	var parts []string
 	if m.editing {
-		parts = append(parts, sAccent.Render("filtro: ")+m.filter+"▏")
+		parts = append(parts, sAccent.Render(i18n.T("filter: "))+m.filter+"▏")
 	} else if m.filter != "" {
-		parts = append(parts, sAccent.Render("filtro: ")+m.filter)
+		parts = append(parts, sAccent.Render(i18n.T("filter: "))+m.filter)
 	}
 	if m.status != "" {
 		parts = append(parts, sRed.Render(sanitize.Line(m.status, 80)))
 	}
-	parts = append(parts, sDim.Render("⏎ apri la sessione · / filtra · ↑↓ scorri · ✓ riuscito ✗ errore ? esito sconosciuto · esc elenco"))
+	parts = append(parts, sDim.Render(i18n.T("⏎ open the session · / filter · ↑↓ scroll · ✓ succeeded ✗ failed ? unknown · esc list")))
 	return lipgloss.NewStyle().MaxWidth(m.w).Render(" " + strings.Join(parts, sDim.Render("  ·  ")))
 }

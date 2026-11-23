@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/fennih/codeguide/internal/i18n"
 	"github.com/fennih/codeguide/internal/model"
 	"github.com/fennih/codeguide/internal/sanitize"
 	"github.com/fennih/codeguide/internal/subagents"
@@ -59,7 +60,7 @@ func dur(d time.Duration) string {
 	case d < 48*time.Hour:
 		return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
 	}
-	return fmt.Sprintf("%dg", int(d.Hours()/24))
+	return i18n.T("%dd", int(d.Hours()/24))
 }
 
 func ago(t time.Time, now time.Time) string {
@@ -69,13 +70,13 @@ func ago(t time.Time, now time.Time) string {
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return "ora"
+		return i18n.T("now")
 	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 48*time.Hour:
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
-	return fmt.Sprintf("%dg", int(d.Hours()/24))
+	return i18n.T("%dd", int(d.Hours()/24))
 }
 
 func width(s string) int { return lipgloss.Width(s) }
@@ -152,9 +153,9 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 			}
 		}
 	}
-	addWrapped("goal   ", sDim, v.Goal(), sBold, 2)
+	addWrapped(i18n.T("goal   "), sDim, v.Goal(), sBold, 2)
 	if v.Summary.Brief != "" {
-		addWrapped("perché ", sDim, v.Summary.Brief, lipgloss.NewStyle(), 3)
+		addWrapped(i18n.T("why    "), sDim, v.Summary.Brief, lipgloss.NewStyle(), 3)
 	}
 	if v.Pending != "" {
 		add(cell(sYellow.Render("▲ "), v.Pending, sYellow, inner))
@@ -162,14 +163,14 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 		add(cell(sYellow.Render("▲ "), v.Summary.Ask, sYellow, inner))
 	}
 	if v.News.Any() {
-		add(cell(sBlue.Render("novità da "+ago(v.Looked, now)+": "), newsText(v.News), sBlue, inner))
+		add(cell(sBlue.Render(i18n.T("news since ")+ago(v.Looked, now)+": "), newsText(v.News), sBlue, inner))
 	}
 	if v.Lane != model.LaneWorking && v.Summary.Outcome != "" {
 		add(cell(sGreen.Render("✓ "), v.Summary.Outcome, lipgloss.NewStyle(), inner))
 	}
 	if v.Lane == model.LaneWorking {
 		if v.Summary.Now != "" {
-			add(cell(sAccent.Render("ora   "), v.Summary.Now, lipgloss.NewStyle(), inner))
+			add(cell(sAccent.Render(i18n.T("now    ")), v.Summary.Now, lipgloss.NewStyle(), inner))
 		}
 		if say := lastSay(v); say != "" {
 			add(cell(sDim.Render("▸ "), say, sIntent, inner))
@@ -235,27 +236,25 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 		}
 	}
 	if hidden > 0 {
-		add(sDim.Render(fmt.Sprintf("  +%d subagent", hidden)))
+		add(sDim.Render(i18n.T("  +%d subagents", hidden)))
 	}
 
 	if v.TurnEffects != "" {
-		add(cell(sCyan.Render("effetti nel turno: "), v.TurnEffects, sCyan, inner))
+		add(cell(sCyan.Render(i18n.T("effects this turn: ")), v.TurnEffects, sCyan, inner))
 	}
 
 	var foot []string
 	if v.Lane == model.LaneWorking {
 		foot = append(foot, sAccent.Render(spin(now))+" "+dur(now.Sub(v.TurnStart)))
 	}
-	if calls == 1 {
-		foot = append(foot, "1 azione")
-	} else if calls > 1 {
-		foot = append(foot, fmt.Sprintf("%d azioni", calls))
+	if calls > 0 {
+		foot = append(foot, i18n.N(calls, "1 action", "%d actions"))
 	}
 	if plus+minus > 0 {
 		foot = append(foot, diffAnn(plus, minus))
 	}
 	if running > 0 {
-		foot = append(foot, fmt.Sprintf("%d subagent attivi", running))
+		foot = append(foot, i18n.N(running, "1 subagent active", "%d subagents active"))
 	}
 	if len(foot) > 0 {
 		add(sDim.Render(strings.Join(foot, " · ")))
@@ -376,23 +375,14 @@ var sentenceEnd = regexp.MustCompile(`[.?!](\s|$)`)
 
 func newsText(n model.News) string {
 	var parts []string
-	switch {
-	case n.Turns == 1:
-		parts = append(parts, "1 turno")
-	case n.Turns > 1:
-		parts = append(parts, fmt.Sprintf("%d turni", n.Turns))
+	if n.Turns > 0 {
+		parts = append(parts, i18n.N(n.Turns, "1 turn", "%d turns"))
 	}
-	switch {
-	case n.Calls == 1:
-		parts = append(parts, "1 azione")
-	case n.Calls > 1:
-		parts = append(parts, fmt.Sprintf("%d azioni", n.Calls))
+	if n.Calls > 0 {
+		parts = append(parts, i18n.N(n.Calls, "1 action", "%d actions"))
 	}
-	switch {
-	case n.Errors == 1:
-		parts = append(parts, "1 errore")
-	case n.Errors > 1:
-		parts = append(parts, fmt.Sprintf("%d errori", n.Errors))
+	if n.Errors > 0 {
+		parts = append(parts, i18n.N(n.Errors, "1 error", "%d errors"))
 	}
 	return strings.Join(parts, " · ")
 }

@@ -13,7 +13,7 @@ import (
 
 type Effect struct {
 	Sys     string `json:"sys"`    // Jira, Confluence, Google, git, GitHub, AWS, ...
-	Act     string `json:"act"`    // what it did, in Italian; "?" when unknown
+	Act     string `json:"act"`    // what it did, an English key for i18n.T; "?" when unknown
 	Target  string `json:"target"` // raw, untrusted: callers sanitize before display
 	Unknown bool   `json:"unknown,omitempty"`
 }
@@ -47,23 +47,23 @@ func ClassifyJSON(tool, raw string) []Effect {
 }
 
 var writeWords = map[string]string{
-	"create": "crea", "add": "crea", "generate": "crea", "draft": "crea", "duplicate": "crea",
-	"edit": "modifica", "update": "modifica", "set": "modifica", "modify": "modifica", "patch": "modifica",
-	"apply": "modifica", "replace": "modifica", "rename": "modifica", "label": "modifica", "unlabel": "modifica",
-	"mark": "modifica", "unmark": "modifica", "certify": "modifica", "uncertify": "modifica",
-	"transition": "transita", "move": "sposta", "copy": "copia",
-	"delete": "elimina", "remove": "elimina", "trash": "elimina", "clear": "elimina", "archive": "elimina",
-	"untrash": "ripristina",
-	"send":    "invia", "reply": "invia", "forward": "invia", "post": "invia",
-	"share": "condivide", "unshare": "condivide",
-	"upload": "carica", "publish": "pubblica", "comment": "commenta",
-	"append": "scrive", "insert": "scrive", "write": "scrive", "batch": "scrive",
+	"create": "create", "add": "create", "generate": "create", "draft": "create", "duplicate": "create",
+	"edit": "edit", "update": "edit", "set": "edit", "modify": "edit", "patch": "edit",
+	"apply": "edit", "replace": "edit", "rename": "edit", "label": "edit", "unlabel": "edit",
+	"mark": "edit", "unmark": "edit", "certify": "edit", "uncertify": "edit",
+	"transition": "transition", "move": "move", "copy": "copy",
+	"delete": "delete", "remove": "delete", "trash": "delete", "clear": "delete", "archive": "delete",
+	"untrash": "restore",
+	"send":    "send", "reply": "send", "forward": "send", "post": "send",
+	"share": "share", "unshare": "share",
+	"upload": "upload", "publish": "publish", "comment": "comment",
+	"append": "write", "insert": "write", "write": "write", "batch": "write",
 }
 
 // priorityWords name the effect better than a generic verb next to them,
 // e.g. addCommentToJiraIssue comments rather than creates.
 var priorityWords = map[string]string{
-	"comment": "commenta", "worklog": "registra ore", "transition": "transita", "link": "collega",
+	"comment": "comment", "worklog": "log time", "transition": "transition", "link": "link",
 }
 
 var readWords = map[string]bool{
@@ -81,10 +81,10 @@ var readWords = map[string]bool{
 // Browser and computer-use servers act on whatever page or app is open, so
 // only input-producing actions count.
 var browserActs = map[string]string{
-	"click": "clic", "double_click": "clic", "right_click": "clic", "fill": "compila", "fill_form": "compila",
-	"type_text": "scrive", "upload_file": "carica", "press_key": "tasto", "hotkey": "tasto",
-	"handle_dialog": "conferma", "evaluate_script": "esegue script", "drag": "trascina", "set_value": "compila",
-	"perform_actions": "azioni", "kill_app": "chiude app",
+	"click": "click", "double_click": "click", "right_click": "click", "fill": "fill", "fill_form": "fill",
+	"type_text": "type", "upload_file": "upload", "press_key": "key", "hotkey": "key",
+	"handle_dialog": "confirm", "evaluate_script": "run script", "drag": "drag", "set_value": "fill",
+	"perform_actions": "actions", "kill_app": "quit app",
 }
 
 var browserServers = map[string]bool{"chrome-devtools": true, "cmux-cua": true, "playwright": true, "computer-use": true}
@@ -224,7 +224,7 @@ type rule struct {
 
 var rules = []rule{
 	{re: regexp.MustCompile(`\bgit\s+(?:-C\s+\S+\s+)?push\b[^|;&\n]*`), sys: "git", act: "push"},
-	{re: regexp.MustCompile(`\bgh\s+(?:pr|issue|release|repo|gist|secret|variable|label)\s+(?:create|merge|close|edit|delete|comment|review|reopen|set|transfer|archive|rename)\b[^|;&\n]*`), sys: "GitHub", act: "modifica"},
+	{re: regexp.MustCompile(`\bgh\s+(?:pr|issue|release|repo|gist|secret|variable|label)\s+(?:create|merge|close|edit|delete|comment|review|reopen|set|transfer|archive|rename)\b[^|;&\n]*`), sys: "GitHub", act: "edit"},
 	{
 		re:   regexp.MustCompile(`\bgh\s+api\b[^|;&\n]*(?:\s(?:-X|--method)\s*(?:POST|PUT|PATCH|DELETE)\b|\s(?:-f|-F|--field|--raw-field|--input)\s)[^|;&\n]*`),
 		sys:  "GitHub",
@@ -235,20 +235,20 @@ var rules = []rule{
 	{
 		re:   regexp.MustCompile(`(?:^|[\s;&|(])aws\s[^|;&\n]*?\s[a-z0-9-]+\s+(?:create|put|delete|update|modify|attach|detach|tag|untag|start|stop|terminate|invoke|publish|send|deploy|run|associate|disassociate|enable|disable|register|deregister|reboot|restore|import|upload|add|remove|revoke|authorize)(?:-[a-z0-9-]+)?\b[^|;&\n]*`),
 		sys:  "AWS",
-		act:  "modifica",
+		act:  "edit",
 		skip: regexp.MustCompile(`\s(?:start-query|start-live-tail|get-[a-z-]+|describe-[a-z-]+|list-[a-z-]+)\b`),
 	},
-	{re: regexp.MustCompile(`\bgcloud\b[^|;&\n]*\s(?:create|delete|update|deploy|patch|import|enable|disable|set-iam-policy|add-iam-policy-binding|remove-iam-policy-binding)\b[^|;&\n]*`), sys: "GCP", act: "modifica"},
-	{re: regexp.MustCompile(`\bkubectl\b[^|;&\n]*\s(?:apply|delete|create|patch|scale|edit|replace|annotate|label|cordon|drain|rollout\s+(?:restart|undo))\b[^|;&\n]*`), sys: "k8s", act: "modifica"},
-	{re: regexp.MustCompile(`\b(?:terraform|tofu)\s+(?:-chdir=\S+\s+)?(?:apply|destroy|import|state\s+(?:rm|mv|push))\b[^|;&\n]*|\bpulumi\s+(?:up|destroy|import|refresh|state\s+delete|config\s+set)\b[^|;&\n]*`), sys: "IaC", act: "applica"},
+	{re: regexp.MustCompile(`\bgcloud\b[^|;&\n]*\s(?:create|delete|update|deploy|patch|import|enable|disable|set-iam-policy|add-iam-policy-binding|remove-iam-policy-binding)\b[^|;&\n]*`), sys: "GCP", act: "edit"},
+	{re: regexp.MustCompile(`\bkubectl\b[^|;&\n]*\s(?:apply|delete|create|patch|scale|edit|replace|annotate|label|cordon|drain|rollout\s+(?:restart|undo))\b[^|;&\n]*`), sys: "k8s", act: "edit"},
+	{re: regexp.MustCompile(`\b(?:terraform|tofu)\s+(?:-chdir=\S+\s+)?(?:apply|destroy|import|state\s+(?:rm|mv|push))\b[^|;&\n]*|\bpulumi\s+(?:up|destroy|import|refresh|state\s+delete|config\s+set)\b[^|;&\n]*`), sys: "IaC", act: "apply"},
 	{
 		re:   regexp.MustCompile(`\bcurl\b[^|;&\n]*(?:\s-X\s*(?:POST|PUT|PATCH|DELETE)\b|\s(?:-d|--data[a-z-]*|-F|--form|-T|--upload-file)[\s=])[^|;&\n]*`),
 		sys:  "HTTP",
-		act:  "invia",
+		act:  "send",
 		skip: regexp.MustCompile(`\s(?:-G|--get)\b`), // data becomes a query string
 	},
-	{re: regexp.MustCompile(`\bhttps?\s+(?:POST|PUT|PATCH|DELETE)\s[^|;&\n]*`), sys: "HTTP", act: "invia"},
-	{re: regexp.MustCompile(`\bdocker\s+push\b[^|;&\n]*|\b(?:npm|pnpm|yarn|bun|cargo)\s+publish\b[^|;&\n]*|\btwine\s+upload\b[^|;&\n]*`), sys: "registry", act: "pubblica"},
+	{re: regexp.MustCompile(`\bhttps?\s+(?:POST|PUT|PATCH|DELETE)\s[^|;&\n]*`), sys: "HTTP", act: "send"},
+	{re: regexp.MustCompile(`\bdocker\s+push\b[^|;&\n]*|\b(?:npm|pnpm|yarn|bun|cargo)\s+publish\b[^|;&\n]*|\btwine\s+upload\b[^|;&\n]*`), sys: "registry", act: "publish"},
 }
 
 var urlRe = regexp.MustCompile(`https?://[^\s'"]+`)

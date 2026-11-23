@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/fennih/codeguide/internal/i18n"
 )
 
 var home, _ = os.UserHomeDir()
@@ -81,32 +83,32 @@ func DetailJSON(tool, raw, cwd string) string {
 }
 
 var verbs = map[string]string{
-	"Bash":            "Esegue",
-	"Read":            "Legge",
-	"Edit":            "Modifica",
-	"MultiEdit":       "Modifica",
-	"NotebookEdit":    "Modifica",
-	"Write":           "Scrive",
-	"Grep":            "Cerca",
-	"Glob":            "Cerca file",
-	"WebSearch":       "Cerca web",
-	"WebFetch":        "Apre",
-	"Agent":           "Delega",
-	"Task":            "Delega",
+	"Bash":            "Runs",
+	"Read":            "Reads",
+	"Edit":            "Edits",
+	"MultiEdit":       "Edits",
+	"NotebookEdit":    "Edits",
+	"Write":           "Writes",
+	"Grep":            "Searches",
+	"Glob":            "Finds files",
+	"WebSearch":       "Web search",
+	"WebFetch":        "Opens",
+	"Agent":           "Delegates",
+	"Task":            "Delegates",
 	"Skill":           "Skill",
-	"AskUserQuestion": "Ti chiede",
-	"ExitPlanMode":    "Piano",
-	"EnterPlanMode":   "Pianifica",
-	"ToolSearch":      "Carica tool",
-	"TodoWrite":       "Lista",
-	"Monitor":         "Monitora",
-	"SendMessage":     "Messaggio",
+	"AskUserQuestion": "Asks you",
+	"ExitPlanMode":    "Plan",
+	"EnterPlanMode":   "Plans",
+	"ToolSearch":      "Loads tools",
+	"TodoWrite":       "Todos",
+	"Monitor":         "Monitors",
+	"SendMessage":     "Message",
 }
 
 // Verb names a tool call as an action a person would describe.
 func Verb(tool string) string {
 	if v, ok := verbs[tool]; ok {
-		return v
+		return i18n.T(v)
 	}
 	return ShortTool(tool)
 }
