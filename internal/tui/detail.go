@@ -105,6 +105,7 @@ func detailHead(v model.View, w int, now time.Time) []string {
 		}
 	}
 	label("Obiettivo", sDim, v.Goal(), sBold, 2)
+	label("Contesto", sDim, v.Summary.Brief, lipgloss.NewStyle(), 4)
 	if v.Lane == model.LaneWorking {
 		label("Ora", sAccent, v.Summary.Now, lipgloss.NewStyle(), 2)
 	}
@@ -207,7 +208,7 @@ func (m Model) detailLines(v model.View, now time.Time) (lines []string, div int
 				}
 			}
 			if sa, ok := subsByCall[e.ID]; ok {
-				out = append(out, m.subLines(sa, v.SubEvents[sa.ID], w, now)...)
+				out = append(out, m.subLines(sa, v.SubMissions[sa.ID], v.SubEvents[sa.ID], w, now)...)
 			}
 		}
 	}
@@ -271,7 +272,7 @@ func turnLines(v model.View, w int, lookedAt time.Time) ([]string, int) {
 }
 
 // subLines nests a subagent under the Agent call that started it.
-func (m Model) subLines(sa subagents.Agent, ev []transcript.Event, w int, now time.Time) []string {
+func (m Model) subLines(sa subagents.Agent, mission string, ev []transcript.Event, w int, now time.Time) []string {
 	pad := strings.Repeat(" ", tsW+4)
 	state := sGreen.Render("✓ finito")
 	if sa.Running {
@@ -282,6 +283,33 @@ func (m Model) subLines(sa subagents.Agent, ev []transcript.Event, w int, now ti
 	line := head + sanitize.Truncate(sa.Description, max(4, descW))
 	line += strings.Repeat(" ", max(1, w-width(line)-width(state))) + state
 	out := []string{line}
+
+	// Mission, brief and report; x shows brief and report in full.
+	block := func(label string, st lipgloss.Style, text string, style lipgloss.Style, maxLines int) {
+		if text == "" {
+			return
+		}
+		prefix := pad + "  " + st.Render(fmt.Sprintf("%-8s", label)) + " "
+		cont := strings.Repeat(" ", width(prefix))
+		for i, l := range wrap(text, w-width(prefix), maxLines) {
+			if i == 0 {
+				out = append(out, prefix+style.Render(l))
+			} else {
+				out = append(out, cont+style.Render(l))
+			}
+		}
+	}
+	long := 4
+	if m.det.subs {
+		long = 30
+	}
+	if mission != "" && mission != sa.Description {
+		block("missione", sCyan, mission, sBold, 2)
+	}
+	block("compito", sDim, sa.Task, sDim, long)
+	if !sa.Running {
+		block("esito", sGreen, sa.Result, lipgloss.NewStyle(), long)
+	}
 
 	var tools []transcript.Event
 	lastSay := ""
@@ -295,7 +323,7 @@ func (m Model) subLines(sa subagents.Agent, ev []transcript.Event, w int, now ti
 	}
 	if !sa.Running && !m.det.subs {
 		if len(tools) > 0 {
-			out = append(out, pad+sFaint.Render(fmt.Sprintf("  %d azioni  (x per vederle)", len(tools))))
+			out = append(out, pad+sFaint.Render(fmt.Sprintf("  %d azioni  (x per vederle, con compito ed esito per intero)", len(tools))))
 		}
 		return out
 	}
@@ -413,7 +441,7 @@ func wrap(s string, w, maxLines int) []string {
 	}
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[:maxLines]
-		lines[maxLines-1] = sanitize.Truncate(lines[maxLines-1], w-2) + " …"
+		lines[maxLines-1] = sanitize.Truncate(lines[maxLines-1]+" …", w)
 	}
 	return lines
 }

@@ -69,12 +69,14 @@ type Collector struct {
 	narr         map[string]*narration
 	lookedSaved  map[string]time.Time
 	lastSave     time.Time
+	asked        map[string]bool // subagent ids whose mission was requested
 }
 
 // Init loads the backlog and the first cmux snapshot.
 func (c *Collector) Init(ctx context.Context) error {
 	c.follows = map[string]*follow{}
 	c.narr = map[string]*narration{}
+	c.asked = map[string]bool{}
 	if err := c.Tail.Open(backlogBytes); err != nil {
 		return err
 	}
@@ -89,6 +91,7 @@ func (c *Collector) Init(ctx context.Context) error {
 			c.Store.SetSummary(sid, s)
 		}
 		c.Store.SetHistory(c.Sum.History())
+		c.Store.SetMissions(c.Sum.Missions())
 	}
 	now := time.Now()
 	c.refreshCmux(ctx, now, true)
@@ -139,6 +142,10 @@ func (c *Collector) WarmUp() {
 			break
 		}
 		if j, ok := jobFor(v); ok {
+			// Summaries cached before the brief field existed are redone once.
+			if v.Summary.Goal != "" && v.Summary.Brief == "" {
+				c.Sum.Forget(j.RecordID)
+			}
 			c.Sum.Enqueue(j)
 			n++
 		}
@@ -161,6 +168,7 @@ func (c *Collector) Tick(ctx context.Context) {
 	if c.Sum == nil {
 		return
 	}
+	c.askMissions(now, views)
 	if c.Narrate {
 		c.narrate(now, c.Store.Views(now))
 	}
@@ -431,6 +439,41 @@ func (c *Collector) narrate(now time.Time, views []model.View) {
 	}
 }
 
+// askMissions requests a one-sentence mission for each new subagent of a
+// session that is active or open in the detail view. Cached per subagent.
+func (c *Collector) askMissions(now time.Time, views []model.View) {
+	focus := c.focused()
+	for _, v := range views {
+		if v.SessionID != focus && v.Lane != model.LaneWorking && now.Sub(v.LastAt) > subagentWindow {
+			continue
+		}
+		for _, sa := range v.Subagents {
+			if sa.Task == "" || c.asked[sa.ID] || now.Sub(sa.Started) > 24*time.Hour || c.Store.HasMission(sa.ID) {
+				continue
+			}
+			c.asked[sa.ID] = true
+			c.Sum.Enqueue(summary.Job{
+				SessionID: v.SessionID, RecordID: "sub:" + sa.ID, Mode: summary.ModeSub,
+				PrevGoal: v.Goal(), SubID: sa.ID, SubType: sa.Type, SubDesc: sa.Description, Task: sa.Task,
+			})
+		}
+	}
+}
+
+// turnNotes returns the latest things the agent said in the current turn.
+func turnNotes(ev []transcript.Event, n int) []string {
+	var notes []string
+	for _, e := range ev[transcript.TurnIndex(ev)+1:] {
+		if e.Kind == transcript.Say || e.Kind == transcript.End {
+			notes = append(notes, e.Text)
+		}
+	}
+	if len(notes) > n {
+		notes = notes[len(notes)-n:]
+	}
+	return notes
+}
+
 // currentTurn returns the start of the latest user turn and its tool calls.
 // When the history starts mid-turn, the first visible event stands in.
 func currentTurn(ev []transcript.Event) (time.Time, []transcript.Event) {
@@ -475,6 +518,9 @@ func jobFor(v model.View) (summary.Job, bool) {
 		j.Mode, j.RecordID = summary.ModeStart, v.PromptID
 	default:
 		return j, false
+	}
+	if len(v.Timeline) > 0 {
+		j.Notes = turnNotes(v.Timeline, 3)
 	}
 	// Recent calls give context when the prompt itself is a terse follow-up.
 	for _, a := range v.Activity {

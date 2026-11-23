@@ -37,6 +37,8 @@ bin/ccwatch --frame 120x40 --detail <session-id>  # one frame of a detail view
 bin/ccwatch --frame 160x40 --effects              # one frame of the external-effects view
 ```
 
+Each tile shows the goal on up to two lines and a "perché" line: why the work matters, what is done and what comes next (written in the same summary call, no extra cost). Subagents show their mission in one sentence, written once per subagent by Haiku from the brief they were given, and their result when they finish; the detail view shows the full brief and report (`x` to expand).
+
 Tiles show what happened since you last looked ("novità da 47m: 3 turni · 21 azioni · 2 errori").
 
 List keys: arrows or `j`/`k` to select, `Enter` (or a click on the selected tile) to open the live detail view, `o` to jump to the cmux tab, `/` to filter, `g` to group by project, `Tab` to show old sessions, `r` to show only sessions with news, `e` for external effects, `s` to regenerate a summary, `?` for help, `q` to quit. The mouse wheel moves the selection.

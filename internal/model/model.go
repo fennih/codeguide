@@ -96,6 +96,9 @@ type Summary struct {
 	Now       string    `json:"now,omitempty"`       // live narration of a running turn
 	NowAt     time.Time `json:"nowAt,omitempty"`     // when Now was written
 	At        time.Time `json:"at,omitempty"`        // when the summary was written
+	Brief     string    `json:"brief,omitempty"`     // why, how far along, what is next
+	Mission   string    `json:"mission,omitempty"`   // subagent summaries only
+	SubID     string    `json:"subId,omitempty"`     // set on subagent summaries
 }
 
 // track is the per-session state built from Feed records.
@@ -160,6 +163,8 @@ type View struct {
 	Looked  time.Time `json:"looked,omitempty"`
 	News    News      `json:"news"`
 	History []Summary `json:"-"` // finished turns, oldest first
+	// SubMissions is a one-sentence mission per subagent id, when known.
+	SubMissions map[string]string `json:"subMissions,omitempty"`
 }
 
 // Goal is the best available one-line goal.
@@ -185,6 +190,7 @@ type Store struct {
 	looked    map[string]time.Time
 	history   map[string][]Summary
 	effects   []effectRow
+	missions  map[string]string   // subagent id -> mission
 	seen      map[string]struct{} // Feed record ids already applied
 	staleAge  time.Duration
 }
@@ -200,6 +206,7 @@ func NewStore(staleAge time.Duration) *Store {
 		subEvents: map[string]map[string][]transcript.Event{},
 		looked:    map[string]time.Time{},
 		history:   map[string][]Summary{},
+		missions:  map[string]string{},
 		staleAge:  staleAge,
 	}
 }
@@ -345,6 +352,10 @@ func (s *Store) SetSubagents(sessionID string, a []subagents.Agent) {
 func (s *Store) SetSummary(sessionID string, sum Summary) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if sum.SubID != "" {
+		s.missions[sum.SubID] = sum.Mission
+		return
+	}
 	cur := s.summaries[sessionID]
 	if sum.Now != "" && sum.Goal == "" && sum.Outcome == "" {
 		cur.Now, cur.NowAt = sum.Now, sum.NowAt
@@ -461,6 +472,23 @@ func turnEffects(rows []effectRow, sid string, since time.Time) string {
 		parts[i] = fmt.Sprintf("%s %d", k, by[k])
 	}
 	return fmt.Sprintf("%d (%s)", n, strings.Join(parts, ", "))
+}
+
+// SetMissions loads cached subagent missions.
+func (s *Store) SetMissions(m map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range m {
+		s.missions[k] = v
+	}
+}
+
+// HasMission reports whether a subagent already has a mission.
+func (s *Store) HasMission(agentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.missions[agentID]
+	return ok
 }
 
 // SetHistory loads finished-turn summaries, oldest first.
@@ -620,6 +648,14 @@ func (s *Store) Views(now time.Time) []View {
 			sa.Type = sanitize.Line(sa.Type, 40)
 			sa.Tool = sanitize.Line(sa.Tool, 40)
 			sa.Detail = sanitize.Line(sa.Detail, 160)
+			sa.Task = sanitize.Line(sa.Task, 4000)
+			sa.Result = sanitize.Line(sa.Result, 4000)
+			if m, ok := s.missions[sa.ID]; ok && m != "" {
+				if v.SubMissions == nil {
+					v.SubMissions = map[string]string{}
+				}
+				v.SubMissions[sa.ID] = sanitize.Line(m, 160)
+			}
 			v.Subagents = append(v.Subagents, sa)
 		}
 		if sum, ok := s.summaries[a.SessionID]; ok {
@@ -634,6 +670,7 @@ func (s *Store) Views(now time.Time) []View {
 				sum.Now = ""
 			}
 			sum.Now = sanitize.Line(sum.Now, 160)
+			sum.Brief = sanitize.Line(sum.Brief, 400)
 			v.Summary = sum
 		}
 		v.TurnEffects = turnEffects(s.effects, a.SessionID, v.TurnStart)

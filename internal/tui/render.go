@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"ccwatch/internal/model"
 	"ccwatch/internal/sanitize"
+	"ccwatch/internal/subagents"
 	"ccwatch/internal/toolfmt"
 	"ccwatch/internal/transcript"
 )
@@ -139,7 +141,21 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 		body = append(body, border.Render("│")+" "+s+strings.Repeat(" ", max(0, pad))+" "+border.Render("│"))
 	}
 
-	add(cell(sDim.Render("goal  "), v.Goal(), sBold, inner))
+	addWrapped := func(label string, labelStyle lipgloss.Style, text string, style lipgloss.Style, maxLines int) {
+		prefix := labelStyle.Render(label)
+		indent := strings.Repeat(" ", width(prefix))
+		for i, l := range wrap(text, inner-width(prefix), maxLines) {
+			if i == 0 {
+				add(prefix + style.Render(l))
+			} else {
+				add(indent + style.Render(l))
+			}
+		}
+	}
+	addWrapped("goal   ", sDim, v.Goal(), sBold, 2)
+	if v.Summary.Brief != "" {
+		addWrapped("perché ", sDim, v.Summary.Brief, lipgloss.NewStyle(), 3)
+	}
 	if v.Pending != "" {
 		add(cell(sYellow.Render("▲ "), v.Pending, sYellow, inner))
 	} else if v.Summary.NeedsUser && v.Summary.Ask != "" {
@@ -188,9 +204,9 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 		add(prefix + text + strings.Repeat(" ", pad) + a.ann)
 	}
 
-	// Subagents: running ones, plus those started in this turn.
-	var subs []string
-	running := 0
+	// Subagents: running ones, plus those started in this turn. Each gets its
+	// mission and, below it, the current tool or the final result.
+	running, shown, hidden := 0, 0, 0
 	for _, s := range v.Subagents {
 		if !s.Running && s.Started.Before(v.TurnStart) {
 			continue
@@ -198,24 +214,28 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 		if s.Running {
 			running++
 		}
-		head := sCyan.Render("↳ "+sanitize.Truncate(s.Type, 16)) + " "
+		if shown == 3 {
+			hidden++
+			continue
+		}
+		shown++
 		state := sGreen.Render(" ✓")
 		if s.Running {
-			state = " " + sAccent.Render("●") + " " + s.Tool
-			if s.Detail != "" {
-				state += " " + sDim.Render(s.Detail)
-			}
+			state = " " + sAccent.Render("●")
 		}
-		descW := inner - width(head) - min(width(state), inner/2)
-		line := head + sanitize.Truncate(s.Description, max(4, descW))
-		line = lipgloss.NewStyle().MaxWidth(inner).Render(line + state)
-		subs = append(subs, line)
+		head := sCyan.Render("↳ "+sanitize.Truncate(s.Type, 16)) + " "
+		line := head + sanitize.Truncate(subMission(v, s), max(4, inner-width(head)-width(state)))
+		add(lipgloss.NewStyle().MaxWidth(inner).Render(line + state))
+		pad := "    "
+		switch {
+		case s.Running && s.Tool != "":
+			add(cell(pad+sAccent.Render("● ")+sBold.Render(toolfmt.Verb(s.Tool))+" ", s.Detail, sDim, inner))
+		case !s.Running && s.Result != "":
+			add(cell(pad+sGreen.Render("→ "), s.Result, sDim, inner))
+		}
 	}
-	if len(subs) > 4 {
-		subs = append(subs[:4], sDim.Render(fmt.Sprintf("  +%d subagent", len(subs)-4)))
-	}
-	for _, s := range subs {
-		add(s)
+	if hidden > 0 {
+		add(sDim.Render(fmt.Sprintf("  +%d subagent", hidden)))
 	}
 
 	if v.TurnEffects != "" {
@@ -335,6 +355,24 @@ func diffAnn(plus, minus int) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// subMission is the best one-line purpose of a subagent: the model-written
+// mission, else the first sentence of its brief, else the parent's label.
+func subMission(v model.View, s subagents.Agent) string {
+	if m := v.SubMissions[s.ID]; m != "" {
+		return m
+	}
+	if s.Task != "" {
+		t := s.Task
+		if loc := sentenceEnd.FindStringIndex(t); loc != nil && loc[0] > 20 && loc[0] < 200 {
+			t = t[:loc[0]+1]
+		}
+		return t
+	}
+	return s.Description
+}
+
+var sentenceEnd = regexp.MustCompile(`[.?!](\s|$)`)
 
 func newsText(n model.News) string {
 	var parts []string

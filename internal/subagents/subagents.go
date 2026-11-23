@@ -15,9 +15,12 @@ import (
 	"time"
 
 	"ccwatch/internal/toolfmt"
+	"ccwatch/internal/transcript"
 )
 
 const (
+	headBytes  = 64 << 10
+	maxText    = 4000
 	tailBytes  = 128 << 10
 	idleCutoff = 90 * time.Second
 )
@@ -34,6 +37,8 @@ type Agent struct {
 	LastWrite   time.Time `json:"lastWrite"`
 	Calls       int       `json:"calls"`
 	ToolUseID   string    `json:"toolUseId,omitempty"` // the parent's Agent call that started it
+	Task        string    `json:"task,omitempty"`      // the brief it was given (first user message)
+	Result      string    `json:"result,omitempty"`    // its final report, once finished
 	Transcript  string    `json:"-"`
 }
 
@@ -109,6 +114,7 @@ func (r *Reader) read(base, cwd string, now time.Time) (Agent, bool) {
 			}
 		}
 	}
+	a.Task = readTask(jsonl)
 	handedBack, endTurn := r.scanTail(jsonl, st.Size(), cwd, &a)
 	a.Running = !handedBack && !finished && now.Sub(a.LastWrite) < idleCutoff && !(endTurn && now.Sub(a.LastWrite) > 10*time.Second)
 	r.cache[jsonl] = cacheEntry{size: st.Size(), mtime: st.ModTime(), agent: a}
@@ -121,10 +127,51 @@ type line struct {
 		StopReason string `json:"stop_reason"`
 		Content    []struct {
 			Type  string         `json:"type"`
+			Text  string         `json:"text"`
 			Name  string         `json:"name"`
 			Input map[string]any `json:"input"`
 		} `json:"content"`
 	} `json:"message"`
+}
+
+// readTask returns the first user message of a subagent transcript: the
+// brief its parent gave it.
+func readTask(path string) string {
+	b, err := readLimited(path, headBytes)
+	if err != nil {
+		return ""
+	}
+	for _, raw := range bytes.Split(b, []byte{'\n'}) {
+		if !bytes.Contains(raw, []byte(`"user"`)) {
+			continue
+		}
+		var l struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(raw, &l) != nil || l.Type != "user" {
+			continue
+		}
+		var s string
+		if json.Unmarshal(l.Message.Content, &s) == nil {
+			return transcript.Prose(s, maxText)
+		}
+		var parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(l.Message.Content, &parts) == nil {
+			for _, p := range parts {
+				if p.Type == "text" && !strings.HasPrefix(strings.TrimSpace(p.Text), "<") {
+					return transcript.Prose(p.Text, maxText)
+				}
+			}
+		}
+		return ""
+	}
+	return ""
 }
 
 // scanTail finds the latest tool call and whether the subagent has finished.
@@ -160,12 +207,18 @@ func (r *Reader) scanTail(path string, size int64, cwd string, a *Agent) (handed
 		}
 		endTurn = l.Message.StopReason == "end_turn"
 		for _, c := range l.Message.Content {
+			if c.Type == "text" && endTurn && !handedBack && strings.TrimSpace(c.Text) != "" {
+				a.Result = transcript.Prose(c.Text, maxText)
+			}
 			if c.Type != "tool_use" {
 				continue
 			}
 			a.Calls++
 			if c.Name == "SubagentHandback" {
 				handedBack = true
+				if msg, ok := c.Input["message"].(string); ok && msg != "" {
+					a.Result = transcript.Prose(msg, maxText)
+				}
 				continue
 			}
 			a.Tool = toolfmt.ShortTool(c.Name)

@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	schema    = `{"type":"object","properties":{"goal":{"type":"string"},"outcome":{"type":"string"},"needs_user":{"type":"boolean"},"ask":{"type":"string"}},"required":["goal","outcome","needs_user","ask"],"additionalProperties":false}`
+	schema    = `{"type":"object","properties":{"goal":{"type":"string"},"brief":{"type":"string"},"outcome":{"type":"string"},"needs_user":{"type":"boolean"},"ask":{"type":"string"}},"required":["goal","brief","outcome","needs_user","ask"],"additionalProperties":false}`
 	nowSchema = `{"type":"object","properties":{"now":{"type":"string"}},"required":["now"],"additionalProperties":false}`
+	subSchema = `{"type":"object","properties":{"mission":{"type":"string"}},"required":["mission"],"additionalProperties":false}`
 )
 
 const systemPrompt = `You write status lines for a dashboard that tracks several Claude Code sessions at once.
@@ -36,6 +37,7 @@ const (
 	ModeStart Mode = "start" // a turn began: goal only
 	ModeStop  Mode = "stop"  // a turn ended: goal, outcome, needs_user, ask
 	ModeNow   Mode = "now"   // a turn is running: one live sentence, never cached
+	ModeSub   Mode = "sub"   // a subagent started: its mission in one sentence
 )
 
 type Job struct {
@@ -48,8 +50,12 @@ type Job struct {
 	Intent    string // latest assistant preamble
 	Final     string
 	Tools     []string
-	Notes     []string  // latest assistant messages, for ModeNow
+	Notes     []string  // latest assistant messages of the turn
 	TurnEnd   time.Time // when the summarized turn ended, for ModeStop
+	SubID     string    // ModeSub: subagent id
+	SubType   string    // ModeSub: subagent type
+	SubDesc   string    // ModeSub: short description given by the parent
+	Task      string    // ModeSub: full brief given by the parent
 }
 
 type Config struct {
@@ -115,6 +121,9 @@ func (s *Summarizer) Latest() map[string]model.Summary {
 	defer s.mu.Unlock()
 	best := map[string]cached{}
 	for _, c := range s.cache {
+		if c.Summary.SubID != "" {
+			continue
+		}
 		if b, ok := best[c.SessionID]; !ok || c.At.After(b.At) {
 			best[c.SessionID] = c
 		}
@@ -136,6 +145,9 @@ func (s *Summarizer) History() map[string][]model.Summary {
 	defer s.mu.Unlock()
 	out := map[string][]model.Summary{}
 	for _, c := range s.cache {
+		if c.Summary.SubID != "" {
+			continue
+		}
 		sum := c.Summary
 		if sum.At.IsZero() {
 			sum.At = c.At
@@ -144,6 +156,19 @@ func (s *Summarizer) History() map[string][]model.Summary {
 	}
 	for _, h := range out {
 		sort.Slice(h, func(i, j int) bool { return h[i].At.Before(h[j].At) })
+	}
+	return out
+}
+
+// Missions returns cached subagent missions by subagent id.
+func (s *Summarizer) Missions() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]string{}
+	for _, c := range s.cache {
+		if c.Summary.SubID != "" {
+			out[c.Summary.SubID] = c.Summary.Mission
+		}
 	}
 	return out
 }
@@ -278,6 +303,14 @@ func (s *Summarizer) handle(ctx context.Context, j Job) {
 		}
 		return
 	}
+	if j.Mode == ModeSub {
+		sum = model.Summary{SubID: j.SubID, Mission: sum.Mission, At: time.Now()}
+		s.cache[j.RecordID] = cached{SessionID: j.SessionID, Summary: sum, At: time.Now()}
+		s.dirty = true
+		s.mu.Unlock()
+		s.deliver(j.SessionID, sum)
+		return
+	}
 	sum.ForRecord = ""
 	sum.At = j.TurnEnd
 	if sum.At.IsZero() {
@@ -328,9 +361,24 @@ func buildNowPrompt(j Job) string {
 	return b.String()
 }
 
+func buildSubPrompt(j Job) string {
+	var b strings.Builder
+	b.WriteString("<session>\n")
+	fmt.Fprintf(&b, "<parent_goal>%s</parent_goal>\n", data(j.PrevGoal, 200))
+	fmt.Fprintf(&b, "<subagent_type>%s</subagent_type>\n", data(j.SubType, 60))
+	fmt.Fprintf(&b, "<short_description>%s</short_description>\n", data(j.SubDesc, 200))
+	fmt.Fprintf(&b, "<task_given>%s</task_given>\n", data(j.Task, 3500))
+	b.WriteString("</session>\n\n")
+	b.WriteString("mission: one sentence, max 110 characters, saying what this helper agent was asked to find out or produce. Add why only if the task itself states it; never guess a purpose. Describe the task; do not perform it. Start with a verb. Write it in the language of parent_goal, even if the task is in another language.\n")
+	return b.String()
+}
+
 func buildPrompt(j Job) string {
-	if j.Mode == ModeNow {
+	switch j.Mode {
+	case ModeNow:
 		return buildNowPrompt(j)
+	case ModeSub:
+		return buildSubPrompt(j)
 	}
 	var b strings.Builder
 	b.WriteString("<session>\n")
@@ -341,6 +389,9 @@ func buildPrompt(j Job) string {
 	fmt.Fprintf(&b, "<last_user_message>%s</last_user_message>\n", data(j.Prompt, 3000))
 	if j.Intent != "" && j.Mode == ModeStart {
 		fmt.Fprintf(&b, "<assistant_latest_note>%s</assistant_latest_note>\n", data(j.Intent, 600))
+	}
+	for _, n := range j.Notes {
+		fmt.Fprintf(&b, "<assistant_note>%s</assistant_note>\n", data(n, 500))
 	}
 	if len(j.Tools) > 0 {
 		b.WriteString("<recent_tool_calls>\n")
@@ -355,6 +406,7 @@ func buildPrompt(j Job) string {
 	}
 	b.WriteString("</session>\n\n")
 	b.WriteString("goal: the session's current overall objective, max 80 characters. If the last user message is a terse follow-up (ok, continue, yes), infer the objective from the previous goal, the tab title, the assistant's note and the tool calls. Never echo a follow-up message verbatim as the goal.\n")
+	b.WriteString("brief: 2-3 short sentences, max 300 characters, that let the user pick the work back up: the overall objective and why it matters, what is already done, and the current or next step. Concrete names; do not repeat the goal wording. Plain sentences, no labels such as Obiettivo: or Fatto:.\n")
 	if j.Mode == ModeStop {
 		b.WriteString("outcome: what this turn achieved or where the work stands now, max 90 characters.\n")
 		b.WriteString("needs_user: true only if the assistant's final message asks the user a question, asks for a decision or approval, or needs a manual action from the user.\n")
@@ -375,6 +427,8 @@ type cliResult struct {
 		NeedsUser bool   `json:"needs_user"`
 		Ask       string `json:"ask"`
 		Now       string `json:"now"`
+		Brief     string `json:"brief"`
+		Mission   string `json:"mission"`
 	} `json:"structured_output"`
 }
 
@@ -382,8 +436,11 @@ func (s *Summarizer) call(ctx context.Context, j Job) (model.Summary, float64, e
 	ctx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)
 	defer cancel()
 	sch := schema
-	if j.Mode == ModeNow {
+	switch j.Mode {
+	case ModeNow:
 		sch = nowSchema
+	case ModeSub:
+		sch = subSchema
 	}
 	args := []string{
 		"-p",
@@ -424,6 +481,8 @@ func (s *Summarizer) call(ctx context.Context, j Job) (model.Summary, float64, e
 		NeedsUser: o.NeedsUser,
 		Ask:       sanitize.Line(o.Ask, 120),
 		Now:       sanitize.Line(o.Now, 140),
+		Brief:     sanitize.Line(o.Brief, 400),
+		Mission:   sanitize.Line(o.Mission, 140),
 	}, r.TotalCostUSD, nil
 }
 

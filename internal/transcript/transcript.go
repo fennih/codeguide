@@ -400,6 +400,9 @@ var (
 	mdEmph    = strings.NewReplacer("**", "", "__", "", "`", "")
 )
 
+// Prose turns Markdown into redacted, sanitized plain text of at most n runes.
+func Prose(s string, n int) string { return prose(s, n) }
+
 // prose turns the agent's Markdown into plain text for one-line display.
 func prose(s string, n int) string {
 	s = mdRule.ReplaceAllString(s, "")
