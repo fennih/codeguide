@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"ccwatch/internal/effects"
 	"ccwatch/internal/sanitize"
 	"ccwatch/internal/toolfmt"
 )
@@ -54,6 +56,10 @@ type Event struct {
 	Plus    int           `json:"plus,omitempty"`
 	Minus   int           `json:"minus,omitempty"`
 	Diff    []string      `json:"diff,omitempty"` // "+ text" / "- text"
+	// External effect of a tool call, if any (see package effects).
+	Sys    string `json:"sys,omitempty"`
+	Act    string `json:"act,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 type Follower struct {
@@ -236,6 +242,12 @@ func (f *Follower) assistant(r rawLine) {
 				At: r.Timestamp, Kind: Tool, Tool: b.Name, Verb: toolfmt.Verb(b.Name), ID: b.ID,
 				Detail: clean(toolfmt.Detail(b.Name, b.Input, f.cwd), 300),
 			}
+			if effs := effects.Classify(b.Name, b.Input); len(effs) > 0 {
+				e.Sys, e.Act, e.Target = effs[0].Sys, effs[0].Act, clean(effs[0].Target, 200)
+				if len(effs) > 1 {
+					e.Target += fmt.Sprintf(" (+%d)", len(effs)-1)
+				}
+			}
 			// Rough counts until the result brings the real patch.
 			if b.Name == "Edit" {
 				if s, ok := b.Input["old_string"].(string); ok {
@@ -336,6 +348,10 @@ func (f *Follower) result(b block, at time.Time, tur json.RawMessage) {
 	}
 	if b.IsError {
 		e.ErrLine = errLine(resultText(b.Content))
+	} else if e.Sys == "Jira" && e.Act == "crea" {
+		if key := effects.IssueKey(resultText(b.Content)); key != "" && !strings.HasPrefix(e.Target, key) {
+			e.Target = strings.TrimSpace(key + " " + e.Target)
+		}
 	}
 	if len(tur) > 0 && tur[0] == '{' {
 		var p patchResult

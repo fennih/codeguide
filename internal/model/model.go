@@ -4,12 +4,14 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"ccwatch/internal/cmux"
+	"ccwatch/internal/effects"
 	"ccwatch/internal/sanitize"
 	"ccwatch/internal/subagents"
 	"ccwatch/internal/toolfmt"
@@ -31,6 +33,8 @@ func (l Lane) String() string {
 }
 
 const (
+	maxEffects  = 3000
+	effectMatch = 10 * time.Second
 	maxActivity = 40
 	maxMarks    = 3000
 	maxHistory  = 30
@@ -50,6 +54,30 @@ type News struct {
 }
 
 func (n News) Any() bool { return n.Turns+n.Calls+n.Errors > 0 }
+
+// EffectRow is one external effect seen in the Feed, enriched from the
+// session's transcript when it is followed.
+type EffectRow struct {
+	effects.Effect
+	At        time.Time `json:"at"`
+	SessionID string    `json:"sessionId"`
+	Tool      string    `json:"tool"`
+	Project   string    `json:"project"`
+	Session   string    `json:"session"` // tab title, or goal for closed sessions
+	Live      bool      `json:"live"`    // still open in cmux
+	Status    byte      `json:"-"`       // 0 unknown, 'o' ok, 'e' error
+	Detailed  bool      `json:"detailed"`
+}
+
+// effectRow comes from the Feed, which records no tool results: outcomes
+// only come from the transcript.
+type effectRow struct {
+	effects.Effect
+	at   time.Time
+	sid  string
+	tool string
+	cwd  string
+}
 
 type Activity struct {
 	At     time.Time `json:"at"`
@@ -110,6 +138,7 @@ type View struct {
 	LastAt      time.Time         `json:"lastAt"`
 	TurnStart   time.Time         `json:"turnStart"`
 	TurnCalls   int               `json:"turnCalls"`
+	TurnEffects string            `json:"turnEffects,omitempty"` // e.g. "3 (Jira 2, git 1)"
 	Prompt      string            `json:"prompt"`
 	PromptID    string            `json:"-"`
 	Preamble    string            `json:"preamble"`
@@ -155,6 +184,7 @@ type Store struct {
 	subEvents map[string]map[string][]transcript.Event
 	looked    map[string]time.Time
 	history   map[string][]Summary
+	effects   []effectRow
 	seen      map[string]struct{} // Feed record ids already applied
 	staleAge  time.Duration
 }
@@ -240,6 +270,13 @@ func (s *Store) Apply(recs []workstream.Record) (turnEvents []workstream.Record)
 				}
 			}
 			t.activity = append(t.activity, Activity{At: r.CreatedAt, Tool: toolfmt.ShortTool(tu.ToolName), Detail: detail})
+			for _, e := range effects.ClassifyJSON(tu.ToolName, tu.ToolInputJSON) {
+				e.Target = sanitize.Line(sanitize.Redact(e.Target), 200)
+				s.effects = append(s.effects, effectRow{Effect: e, at: r.CreatedAt, sid: r.SessionID, tool: tu.ToolName, cwd: t.cwd})
+			}
+			if len(s.effects) > maxEffects+500 {
+				s.effects = append([]effectRow(nil), s.effects[len(s.effects)-maxEffects:]...)
+			}
 			if len(t.activity) > maxActivity {
 				t.activity = t.activity[len(t.activity)-maxActivity:]
 			}
@@ -322,6 +359,108 @@ func (s *Store) SetSummary(sessionID string, sum Summary) {
 	if sum.ForRecord != "" {
 		s.addHistoryLocked(sessionID, sum)
 	}
+}
+
+// Effects returns external effects, newest first. Rows of sessions whose
+// transcript is followed get the full target and outcome from it.
+func (s *Store) Effects() []EffectRow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := map[string]cmux.Agent{}
+	for _, a := range s.agents {
+		live[a.SessionID] = a
+	}
+	used := map[string]map[int]bool{}
+	out := make([]EffectRow, 0, len(s.effects))
+	for i := len(s.effects) - 1; i >= 0; i-- {
+		e := s.effects[i]
+		row := EffectRow{Effect: e.Effect, At: e.at, SessionID: e.sid, Tool: e.tool, Project: toolfmt.Project(e.cwd)}
+		if a, ok := live[e.sid]; ok {
+			row.Live, row.Session = true, sanitize.Line(sanitize.Redact(a.Label), 120)
+		} else if sum, ok := s.summaries[e.sid]; ok && sum.Goal != "" {
+			row.Session = sanitize.Line(sum.Goal, 120)
+		}
+		if tl := s.timelines[e.sid]; len(tl) > 0 {
+			if used[e.sid] == nil {
+				used[e.sid] = map[int]bool{}
+			}
+			if j := matchEvent(tl, e.tool, e.at, used[e.sid]); j >= 0 {
+				used[e.sid][j] = true
+				ev := tl[j]
+				row.Detailed = true
+				if ev.Target != "" {
+					row.Target = ev.Target
+				}
+				switch {
+				case ev.Error:
+					row.Status = 'e'
+				case ev.Done:
+					row.Status = 'o'
+				}
+			}
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// matchEvent finds the unused transcript call of the same tool closest in
+// time to a Feed record, within effectMatch.
+func matchEvent(tl []transcript.Event, tool string, at time.Time, used map[int]bool) int {
+	best, bestD := -1, effectMatch+1
+	for j, ev := range tl {
+		if ev.Kind != transcript.Tool || ev.Tool != tool || used[j] {
+			continue
+		}
+		d := ev.At.Sub(at)
+		if d < 0 {
+			d = -d
+		}
+		if d <= effectMatch && d < bestD {
+			best, bestD = j, d
+		}
+	}
+	return best
+}
+
+// EffectSessions lists the sessions that have external effects on record.
+func (s *Store) EffectSessions() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]bool{}
+	for _, e := range s.effects {
+		out[e.sid] = true
+	}
+	return out
+}
+
+func turnEffects(rows []effectRow, sid string, since time.Time) string {
+	if since.IsZero() {
+		return ""
+	}
+	by := map[string]int{}
+	var order []string
+	n := 0
+	for i := len(rows) - 1; i >= 0 && !rows[i].at.Before(since.Add(-time.Minute)); i-- {
+		e := rows[i]
+		if e.sid != sid || e.at.Before(since) {
+			continue
+		}
+		if by[e.Sys] == 0 {
+			order = append(order, e.Sys)
+		}
+		by[e.Sys]++
+		n++
+	}
+	if n == 0 {
+		return ""
+	}
+	parts := make([]string, len(order))
+	for i := range order {
+		k := order[len(order)-1-i]
+		parts[i] = fmt.Sprintf("%s %d", k, by[k])
+	}
+	return fmt.Sprintf("%d (%s)", n, strings.Join(parts, ", "))
 }
 
 // SetHistory loads finished-turn summaries, oldest first.
@@ -443,7 +582,7 @@ func (s *Store) Views(now time.Time) []View {
 	views := make([]View, 0, len(s.agents))
 	for _, a := range s.agents {
 		v := View{
-			SessionID: a.SessionID, Title: sanitize.Line(a.Label, 120), State: a.State,
+			SessionID: a.SessionID, Title: sanitize.Line(sanitize.Redact(a.Label), 120), State: a.State,
 			Unread: a.Unread, LastAt: a.LastActivity, Cwd: a.Cwd,
 			PanelID: a.PanelID, WorkspaceID: a.WorkspaceID,
 		}
@@ -497,6 +636,7 @@ func (s *Store) Views(now time.Time) []View {
 			sum.Now = sanitize.Line(sum.Now, 160)
 			v.Summary = sum
 		}
+		v.TurnEffects = turnEffects(s.effects, a.SessionID, v.TurnStart)
 		v.Timeline = s.timelines[a.SessionID]
 		v.SubEvents = s.subEvents[a.SessionID]
 		v.History = s.history[a.SessionID]

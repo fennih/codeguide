@@ -61,6 +61,7 @@ type Collector struct {
 
 	mu           sync.Mutex
 	focus        string
+	ledger       bool
 	err          string
 	lastAgents   time.Time
 	lastSessions time.Time
@@ -102,6 +103,20 @@ func (c *Collector) SetFocus(sessionID string) {
 	c.mu.Lock()
 	c.focus = sessionID
 	c.mu.Unlock()
+}
+
+// SetLedger tells the collector the external-effects view is open, so it
+// follows the transcripts of open sessions that have effects.
+func (c *Collector) SetLedger(open bool) {
+	c.mu.Lock()
+	c.ledger = open
+	c.mu.Unlock()
+}
+
+func (c *Collector) LedgerOpen() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ledger
 }
 
 func (c *Collector) focused() string {
@@ -316,9 +331,13 @@ func (c *Collector) refreshTimelines(now time.Time, views []model.View) {
 		return
 	}
 	focus := c.focused()
+	var withEffects map[string]bool
+	if c.LedgerOpen() {
+		withEffects = c.Store.EffectSessions()
+	}
 	for _, v := range views {
 		isFocus := v.SessionID == focus
-		want := isFocus || v.Lane == model.LaneWorking ||
+		want := isFocus || v.Lane == model.LaneWorking || withEffects[v.SessionID] ||
 			(v.Lane == model.LaneNeedsYou && now.Sub(v.LastAt) < subagentWindow)
 		if !want || v.Transcript == "" {
 			continue

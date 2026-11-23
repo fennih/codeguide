@@ -218,6 +218,10 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 		add(s)
 	}
 
+	if v.TurnEffects != "" {
+		add(cell(sCyan.Render("effetti nel turno: "), v.TurnEffects, sCyan, inner))
+	}
+
 	var foot []string
 	if v.Lane == model.LaneWorking {
 		foot = append(foot, sAccent.Render(spin(now))+" "+dur(now.Sub(v.TurnStart)))

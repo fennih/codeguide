@@ -14,6 +14,8 @@ ccwatch only reads. It never types into a session.
 - Optional: a live "ora:" line for working sessions, written by the same isolated call at most every 90 seconds and only after 8 new actions. It has its own cap (default 40 per hour) and is not cached.
 - `cmux events` (focused tab, window focus) and `cmux identify`: to know when you last looked at each session. A session counts as seen while its tab is in front, when you type a prompt in it, or when you open it from ccwatch. Only session ids and times are stored, in `~/.local/state/ccwatch/seen.json` (mode 0600).
 
+The external-effects view (`e`) lists what agents changed outside the machine: Jira and Confluence writes, Google documents, other MCP tools whose names say they write, and Bash commands such as `git push`, `gh pr create`, write calls with `gh api`, `aws`, `gcloud`, `kubectl`, `terraform`/`pulumi`, `curl` with a body or write method, and package publishing. It is built from the Feed, so it covers closed sessions too; targets and outcomes come from the transcript of sessions that are still open. It is a floor, not a full list: a script can write anywhere without matching a rule. MCP tools that cannot be classified are shown as "non classificati".
+
 Everything read from transcripts is untrusted: terminal escapes and bidi controls are stripped, and common secret formats are masked before display, including in diffs.
 
 ## Build
@@ -32,11 +34,12 @@ bin/ccwatch --no-llm        # no model calls
 bin/ccwatch --once          # one JSON snapshot, no model calls
 bin/ccwatch --frame 120x40  # print one frame and exit
 bin/ccwatch --frame 120x40 --detail <session-id>  # one frame of a detail view
+bin/ccwatch --frame 160x40 --effects              # one frame of the external-effects view
 ```
 
 Tiles show what happened since you last looked ("novità da 47m: 3 turni · 21 azioni · 2 errori").
 
-List keys: arrows or `j`/`k` to select, `Enter` (or a click on the selected tile) to open the live detail view, `o` to jump to the cmux tab, `/` to filter, `g` to group by project, `Tab` to show old sessions, `r` to show only sessions with news, `s` to regenerate a summary, `?` for help, `q` to quit. The mouse wheel moves the selection.
+List keys: arrows or `j`/`k` to select, `Enter` (or a click on the selected tile) to open the live detail view, `o` to jump to the cmux tab, `/` to filter, `g` to group by project, `Tab` to show old sessions, `r` to show only sessions with news, `e` for external effects, `s` to regenerate a summary, `?` for help, `q` to quit. The mouse wheel moves the selection.
 
 Detail keys: `Enter` or `o` to jump to the tab, `u` to jump to where you left off ("eri qui"), `t` for the outline of past turns, `d` to show edit diffs, `x` to expand finished subagents, arrows/`PgUp`/`PgDn`/wheel to scroll (scrolling up pauses the live view), `f` to follow again, `n`/`p` for the next or previous session, `Esc` to go back.
 

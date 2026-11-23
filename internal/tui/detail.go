@@ -23,6 +23,8 @@ type detail struct {
 	diffs  bool
 	subs   bool // expand finished subagents too
 	turns  bool // show the turn outline instead of the timeline
+	// fromLedger returns to the effects view on close.
+	fromLedger bool
 	// lookedAt is when the user last looked before opening; events after it
 	// are new and get an "eri qui" divider.
 	lookedAt time.Time

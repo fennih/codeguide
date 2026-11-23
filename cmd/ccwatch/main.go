@@ -45,6 +45,7 @@ func run() error {
 		nowPerHour = flag.Int("narrate-per-hour", 40, "cap on live narration calls per hour")
 		noMouse    = flag.Bool("no-mouse", false, "do not capture the mouse")
 		detailID   = flag.String("detail", "", "with --frame: render the detail view of this session id")
+		effectsV   = flag.Bool("effects", false, "with --frame: render the external-effects view")
 		claudeBin  = flag.String("claude-bin", "", "Claude Code binary for summaries (default: first non-cmux-shim claude in PATH)")
 		cmuxBin    = flag.String("cmux-bin", "", "cmux CLI (default: $CMUX_BUNDLED_CLI_PATH or cmux in PATH)")
 		modelName  = flag.String("model", "haiku", "model for summaries")
@@ -120,6 +121,9 @@ func run() error {
 	snapshot := func() tui.Snapshot {
 		now := time.Now()
 		s := tui.Snapshot{Views: store.Views(now), CallsToday: store.CallsToday(now), LLM: sum != nil, Err: col.Err(), At: now}
+		if col.LedgerOpen() {
+			s.Effects = store.Effects()
+		}
 		if sum != nil {
 			s.Stats = sum.Stats()
 		}
@@ -131,7 +135,11 @@ func run() error {
 		if _, err := fmt.Sscanf(*frameSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			return errors.New("--frame wants WIDTHxHEIGHT")
 		}
-		base := tui.New(cm, tui.Options{Focus: col.SetFocus})
+		base := tui.New(cm, tui.Options{Focus: col.SetFocus, Ledger: col.SetLedger})
+		if *effectsV {
+			base = base.WithLedger()
+			col.Tick(ctx)
+		}
 		if *detailID != "" {
 			if !cmux.ValidID(*detailID) {
 				return errors.New("--detail wants a session id")
@@ -165,7 +173,7 @@ func run() error {
 	}
 	go cm.Follow(ctx, col.Presence)
 
-	m := tui.New(cm, tui.Options{Resummarize: col.Resummarize, Focus: col.SetFocus, Look: col.Look})
+	m := tui.New(cm, tui.Options{Resummarize: col.Resummarize, Focus: col.SetFocus, Look: col.Look, Ledger: col.SetLedger})
 	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
 	if !*noMouse {
 		opts = append(opts, tea.WithMouseCellMotion())

@@ -23,6 +23,7 @@ const minTile = 56
 type Snapshot struct {
 	Views      []model.View
 	CallsToday int
+	Effects    []model.EffectRow // only while the effects view is open
 	Stats      summary.Stats
 	LLM        bool
 	Err        string
@@ -37,6 +38,7 @@ type Options struct {
 	Resummarize func(sessionID string)
 	Focus       func(sessionID string) // session shown in the detail view, "" for none
 	Look        func(sessionID string) // the user jumped to a session's tab
+	Ledger      func(open bool)        // the external-effects view opened or closed
 }
 
 // hit is a clickable screen rectangle for one session.
@@ -61,6 +63,29 @@ type Model struct {
 	inDetail bool
 	det      detail
 	newsOnly bool
+	inLedger bool
+	ledSel   int
+}
+
+// WithLedger opens the external-effects view (used by --frame).
+func (m Model) WithLedger() Model {
+	return m.openLedger()
+}
+
+func (m Model) openLedger() Model {
+	m.inLedger, m.ledSel, m.status = true, 0, ""
+	if m.opt.Ledger != nil {
+		m.opt.Ledger(true)
+	}
+	return m
+}
+
+func (m Model) closeLedger() Model {
+	m.inLedger = false
+	if m.opt.Ledger != nil {
+		m.opt.Ledger(false)
+	}
+	return m
 }
 
 func New(c cmux.Client, o Options) Model {
@@ -88,6 +113,9 @@ func (m Model) closeDetail() Model {
 	m.inDetail, m.selected, m.status = false, m.det.sid, ""
 	if m.opt.Focus != nil {
 		m.opt.Focus("")
+	}
+	if m.det.fromLedger {
+		m.inLedger = true
 	}
 	return m
 }
@@ -125,8 +153,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.mouse(msg)
 	case tea.KeyMsg:
-		if m.inDetail {
+		switch {
+		case m.editing:
+			return m.key(msg)
+		case m.inDetail:
 			return m.detailKey(msg)
+		case m.inLedger:
+			return m.ledgerKey(msg)
 		}
 		return m.key(msg)
 	}
@@ -190,6 +223,8 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showOld = !m.showOld
 	case "r":
 		m.newsOnly = !m.newsOnly
+	case "e":
+		return m.openLedger(), nil
 	case "/":
 		m.editing, m.filter = true, ""
 	case "esc":
@@ -287,6 +322,15 @@ func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if msg.Action != tea.MouseActionPress {
 		return m, nil
 	}
+	if m.inLedger {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.ledSel = max(0, m.ledSel-3)
+		case tea.MouseButtonWheelDown:
+			m.ledSel += 3
+		}
+		return m, nil
+	}
 	if m.inDetail {
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
@@ -374,6 +418,9 @@ func (m Model) View() string {
 	now := time.Now()
 	if m.inDetail {
 		return m.detailView(now)
+	}
+	if m.inLedger {
+		return m.ledgerView(now)
 	}
 	out, _ := m.listFrame(now)
 	return strings.Join(out, "\n")
@@ -491,7 +538,7 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 	if m.help {
 		out = append(out,
 			sDim.Render(" ↑↓/jk seleziona   ⏎ o click apre il dettaglio dal vivo   o vai al tab in cmux   / filtra"),
-			sDim.Render(" r solo sessioni con novità   g ordina per progetto   tab sessioni vecchie   s rigenera goal/esito   q esci"),
+			sDim.Render(" r solo sessioni con novità   e effetti esterni   g per progetto   tab vecchie   s rigenera goal/esito   q esci"),
 			sDim.Render(" ▲ serve te   ● azione   ✗ errore   +N −M righe modificate   ↳ subagent   ✓ esito   • non letto"),
 		)
 	}
