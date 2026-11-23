@@ -36,6 +36,7 @@ type frame time.Time
 type Options struct {
 	Resummarize func(sessionID string)
 	Focus       func(sessionID string) // session shown in the detail view, "" for none
+	Look        func(sessionID string) // the user jumped to a session's tab
 }
 
 // hit is a clickable screen rectangle for one session.
@@ -59,6 +60,7 @@ type Model struct {
 	status   string
 	inDetail bool
 	det      detail
+	newsOnly bool
 }
 
 func New(c cmux.Client, o Options) Model {
@@ -72,6 +74,10 @@ func (m Model) WithDetail(sid string) Model {
 
 func (m Model) openDetail(sid string) Model {
 	m.inDetail, m.det, m.status = true, detail{sid: sid, follow: true}, ""
+	// Keep the previous look time: the divider marks what was new on opening.
+	if v, ok := m.viewByID(sid); ok {
+		m.det.lookedAt = v.Looked
+	}
 	if m.opt.Focus != nil {
 		m.opt.Focus(sid)
 	}
@@ -87,6 +93,9 @@ func (m Model) closeDetail() Model {
 }
 
 func (m Model) jump(v model.View) tea.Cmd {
+	if m.opt.Look != nil {
+		m.opt.Look(v.SessionID)
+	}
 	c := m.cmux
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -179,10 +188,12 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.byProj = !m.byProj
 	case "tab":
 		m.showOld = !m.showOld
+	case "r":
+		m.newsOnly = !m.newsOnly
 	case "/":
 		m.editing, m.filter = true, ""
 	case "esc":
-		m.filter = ""
+		m.filter, m.newsOnly = "", false
 	case "s":
 		if idx >= 0 && m.opt.Resummarize != nil {
 			m.opt.Resummarize(items[idx].SessionID)
@@ -219,6 +230,16 @@ func (m Model) detailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.det.follow = true
 	case "d":
 		m.det.diffs = !m.det.diffs
+	case "t":
+		m.det.turns = !m.det.turns
+		m.det.follow = !m.det.turns
+		m.det.top = 0
+	case "u":
+		if v, ok := m.viewByID(m.det.sid); ok {
+			if _, div := m.detailLines(v, time.Now()); div >= 0 {
+				m.det.follow, m.det.top = false, max(0, div-2)
+			}
+		}
 	case "x":
 		m.det.subs = !m.det.subs
 	case "n", "p":
@@ -249,7 +270,8 @@ func (m Model) detailScroll(d int) Model {
 		return m
 	}
 	now := time.Now()
-	total := len(m.detailLines(v, now))
+	lines, _ := m.detailLines(v, now)
+	total := len(lines)
 	bodyH := max(1, m.h-len(detailHead(v, m.w, now))-1)
 	maxTop := max(0, total-bodyH)
 	t := m.detailStart(total, bodyH) + d
@@ -324,7 +346,15 @@ func (m Model) items() []model.View {
 		if f != "" && !strings.Contains(strings.ToLower(v.Title+" "+v.Project+" "+v.Goal()), f) {
 			continue
 		}
+		if m.newsOnly && !v.News.Any() {
+			continue
+		}
 		out = append(out, v)
+	}
+	if m.newsOnly {
+		score := func(n model.News) int { return n.Turns*10 + n.Errors*3 + n.Calls }
+		sort.SliceStable(out, func(i, j int) bool { return score(out[i].News) > score(out[j].News) })
+		return out
 	}
 	if m.byProj {
 		sort.SliceStable(out, func(i, j int) bool {
@@ -461,7 +491,7 @@ func (m Model) listFrame(now time.Time) ([]string, []hit) {
 	if m.help {
 		out = append(out,
 			sDim.Render(" ↑↓/jk seleziona   ⏎ o click apre il dettaglio dal vivo   o vai al tab in cmux   / filtra"),
-			sDim.Render(" g ordina per progetto   tab sessioni vecchie   s rigenera goal/esito   ? aiuto   q esci"),
+			sDim.Render(" r solo sessioni con novità   g ordina per progetto   tab sessioni vecchie   s rigenera goal/esito   q esci"),
 			sDim.Render(" ▲ serve te   ● azione   ✗ errore   +N −M righe modificate   ↳ subagent   ✓ esito   • non letto"),
 		)
 	}
@@ -511,6 +541,20 @@ func (m Model) footer() string {
 	if m.byProj {
 		parts = append(parts, sBlue.Render("per progetto"))
 	}
+	nNews := 0
+	for _, v := range m.snap.Views {
+		if v.News.Any() && v.Lane != model.LaneStale {
+			nNews++
+		}
+	}
+	switch {
+	case m.newsOnly:
+		parts = append(parts, sBlue.Render("solo sessioni con novità (r per tutte)"))
+	case nNews == 1:
+		parts = append(parts, sBlue.Render("1 sessione con novità · r per vederla"))
+	case nNews > 1:
+		parts = append(parts, sBlue.Render(fmt.Sprintf("%d sessioni con novità · r per vederle", nNews)))
+	}
 	msg := m.status
 	if m.snap.Err != "" {
 		msg = m.snap.Err
@@ -520,7 +564,7 @@ func (m Model) footer() string {
 	if msg != "" {
 		parts = append(parts, sRed.Render(sanitize.Line(msg, 100)))
 	}
-	if len(parts) == 0 {
+	if msg == "" {
 		parts = append(parts, sDim.Render("⏎ dettaglio · o vai al tab · / filtra · g progetto · tab vecchie · ? aiuto · q esci"))
 	}
 	return lipgloss.NewStyle().MaxWidth(m.w).Render(" " + strings.Join(parts, sDim.Render("  ·  ")))

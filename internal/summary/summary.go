@@ -18,6 +18,7 @@ import (
 
 	"ccwatch/internal/model"
 	"ccwatch/internal/sanitize"
+	"ccwatch/internal/statefile"
 )
 
 const (
@@ -47,7 +48,8 @@ type Job struct {
 	Intent    string // latest assistant preamble
 	Final     string
 	Tools     []string
-	Notes     []string // latest assistant messages, for ModeNow
+	Notes     []string  // latest assistant messages, for ModeNow
+	TurnEnd   time.Time // when the summarized turn ended, for ModeStop
 }
 
 type Config struct {
@@ -104,11 +106,7 @@ func New(cfg Config, deliver func(string, model.Summary)) (*Summarizer, error) {
 func (s *Summarizer) cachePath() string { return filepath.Join(s.cfg.StateDir, "summaries.json") }
 
 func (s *Summarizer) load() {
-	b, err := os.ReadFile(s.cachePath())
-	if err != nil {
-		return
-	}
-	_ = json.Unmarshal(b, &s.cache)
+	_ = statefile.Read(s.cachePath(), &s.cache)
 }
 
 // Latest returns the most recent cached summary per session, for warm starts.
@@ -123,7 +121,29 @@ func (s *Summarizer) Latest() map[string]model.Summary {
 	}
 	out := make(map[string]model.Summary, len(best))
 	for k, v := range best {
-		out[k] = v.Summary
+		sum := v.Summary
+		if sum.At.IsZero() {
+			sum.At = v.At
+		}
+		out[k] = sum
+	}
+	return out
+}
+
+// History returns every cached turn summary per session, oldest first.
+func (s *Summarizer) History() map[string][]model.Summary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string][]model.Summary{}
+	for _, c := range s.cache {
+		sum := c.Summary
+		if sum.At.IsZero() {
+			sum.At = c.At
+		}
+		out[c.SessionID] = append(out[c.SessionID], sum)
+	}
+	for _, h := range out {
+		sort.Slice(h, func(i, j int) bool { return h[i].At.Before(h[j].At) })
 	}
 	return out
 }
@@ -259,6 +279,10 @@ func (s *Summarizer) handle(ctx context.Context, j Job) {
 		return
 	}
 	sum.ForRecord = ""
+	sum.At = j.TurnEnd
+	if sum.At.IsZero() {
+		sum.At = time.Now()
+	}
 	if j.Mode == ModeStop {
 		sum.ForRecord = j.RecordID
 	}
@@ -436,22 +460,11 @@ func (s *Summarizer) save() {
 			delete(s.cache, e.k)
 		}
 	}
-	b, err := json.Marshal(s.cache)
+	snapshot := make(map[string]cached, len(s.cache))
+	for k, v := range s.cache {
+		snapshot[k] = v
+	}
 	s.dirty = false
 	s.mu.Unlock()
-	if err != nil {
-		return
-	}
-	tmp, err := os.CreateTemp(s.cfg.StateDir, "summaries-*.tmp")
-	if err != nil {
-		return
-	}
-	_ = tmp.Chmod(0o600)
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return
-	}
-	tmp.Close()
-	_ = os.Rename(tmp.Name(), s.cachePath())
+	_ = statefile.Write(s.cachePath(), snapshot)
 }

@@ -30,7 +30,26 @@ func (l Lane) String() string {
 	return [...]string{"needs_you", "working", "idle", "stale"}[l]
 }
 
-const maxActivity = 40
+const (
+	maxActivity = 40
+	maxMarks    = 3000
+	maxHistory  = 30
+)
+
+// mark is one Feed event, kept compact to count what happened since a time.
+type mark struct {
+	at   time.Time
+	kind byte // 'p' prompt, 'c' call, 'e' error, 's' stop
+}
+
+// News counts what happened in a session since the user last looked at it.
+type News struct {
+	Turns  int `json:"turns"`
+	Calls  int `json:"calls"`
+	Errors int `json:"errors"`
+}
+
+func (n News) Any() bool { return n.Turns+n.Calls+n.Errors > 0 }
 
 type Activity struct {
 	At     time.Time `json:"at"`
@@ -48,6 +67,7 @@ type Summary struct {
 	ForRecord string    `json:"forRecord,omitempty"` // Feed record id it was made from
 	Now       string    `json:"now,omitempty"`       // live narration of a running turn
 	NowAt     time.Time `json:"nowAt,omitempty"`     // when Now was written
+	At        time.Time `json:"at,omitempty"`        // when the summary was written
 }
 
 // track is the per-session state built from Feed records.
@@ -67,6 +87,14 @@ type track struct {
 	pending    *workstream.Record
 	callsToday int
 	day        int
+	marks      []mark
+}
+
+func (t *track) mark(at time.Time, kind byte) {
+	t.marks = append(t.marks, mark{at, kind})
+	if len(t.marks) > maxMarks+500 {
+		t.marks = append([]mark(nil), t.marks[len(t.marks)-maxMarks:]...)
+	}
 }
 
 // View is what the TUI renders for one session.
@@ -87,6 +115,7 @@ type View struct {
 	Preamble    string            `json:"preamble"`
 	Stop        string            `json:"stop"`
 	StopID      string            `json:"-"`
+	StopAt      time.Time         `json:"-"`
 	Pending     string            `json:"pending,omitempty"`
 	Activity    []Activity        `json:"activity"`
 	Subagents   []subagents.Agent `json:"subagents"`
@@ -98,6 +127,10 @@ type View struct {
 	// working, recently waiting on the user, or open in the detail view.
 	Timeline  []transcript.Event            `json:"timeline,omitempty"`
 	SubEvents map[string][]transcript.Event `json:"-"` // by subagent id, detail view only
+	// Looked is when the user last looked at this session; zero if unknown.
+	Looked  time.Time `json:"looked,omitempty"`
+	News    News      `json:"news"`
+	History []Summary `json:"-"` // finished turns, oldest first
 }
 
 // Goal is the best available one-line goal.
@@ -120,7 +153,9 @@ type Store struct {
 	summaries map[string]Summary
 	timelines map[string][]transcript.Event
 	subEvents map[string]map[string][]transcript.Event
-	seen      map[string]struct{}
+	looked    map[string]time.Time
+	history   map[string][]Summary
+	seen      map[string]struct{} // Feed record ids already applied
 	staleAge  time.Duration
 }
 
@@ -133,6 +168,8 @@ func NewStore(staleAge time.Duration) *Store {
 		summaries: map[string]Summary{},
 		timelines: map[string][]transcript.Event{},
 		subEvents: map[string]map[string][]transcript.Event{},
+		looked:    map[string]time.Time{},
+		history:   map[string][]Summary{},
 		staleAge:  staleAge,
 	}
 }
@@ -182,6 +219,9 @@ func (s *Store) Apply(recs []workstream.Record) (turnEvents []workstream.Record)
 			if p := toolfmt.CleanPrompt(r.Payload.UserPrompt.Text); p != "" {
 				t.prompt = p
 				t.promptID = r.ID
+				// Typing a prompt means the user was looking at the session.
+				s.lookLocked(r.SessionID, r.CreatedAt)
+				t.mark(r.CreatedAt, 'p')
 			}
 			t.turnStart = r.CreatedAt
 			t.turnCalls = 0
@@ -204,12 +244,16 @@ func (s *Store) Apply(recs []workstream.Record) (turnEvents []workstream.Record)
 				t.activity = t.activity[len(t.activity)-maxActivity:]
 			}
 			t.turnCalls++
+			t.mark(r.CreatedAt, 'c')
 			if d := r.CreatedAt.YearDay(); d != t.day {
 				t.day, t.callsToday = d, 0
 			}
 			t.callsToday++
 			t.pending = nil
 		case "toolResult":
+			if r.Payload.ToolResult != nil && r.Payload.ToolResult.IsError {
+				t.mark(r.CreatedAt, 'e')
+			}
 			if r.Payload.ToolResult != nil && r.Payload.ToolResult.IsError && len(t.activity) > 0 {
 				// Results carry no tool-use id; mark the latest call of that tool.
 				for i := len(t.activity) - 1; i >= 0; i-- {
@@ -226,6 +270,7 @@ func (s *Store) Apply(recs []workstream.Record) (turnEvents []workstream.Record)
 			}
 			t.stopID, t.stopAt = r.ID, r.CreatedAt
 			t.pending = nil
+			t.mark(r.CreatedAt, 's')
 			turnEvents = append(turnEvents, r)
 		case "question", "exitPlan", "permissionRequest":
 			if r.Pending() {
@@ -274,6 +319,76 @@ func (s *Store) SetSummary(sessionID string, sum Summary) {
 	}
 	sum.Now, sum.NowAt = cur.Now, cur.NowAt
 	s.summaries[sessionID] = sum
+	if sum.ForRecord != "" {
+		s.addHistoryLocked(sessionID, sum)
+	}
+}
+
+// SetHistory loads finished-turn summaries, oldest first.
+func (s *Store) SetHistory(h map[string][]Summary) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for sid, list := range h {
+		for _, sum := range list {
+			if sum.ForRecord != "" {
+				s.addHistoryLocked(sid, sum)
+			}
+		}
+	}
+}
+
+func (s *Store) addHistoryLocked(sid string, sum Summary) {
+	h := s.history[sid]
+	for i, e := range h {
+		if e.ForRecord == sum.ForRecord {
+			if e.At.IsZero() {
+				h[i].At = sum.At
+			}
+			return
+		}
+	}
+	h = append(h, sum)
+	sort.SliceStable(h, func(i, j int) bool { return h[i].At.Before(h[j].At) })
+	if len(h) > maxHistory {
+		h = h[len(h)-maxHistory:]
+	}
+	s.history[sid] = h
+}
+
+// Look records that the user looked at a session at t; earlier times are ignored.
+func (s *Store) Look(sessionID string, t time.Time) {
+	s.mu.Lock()
+	s.lookLocked(sessionID, t)
+	s.mu.Unlock()
+}
+
+func (s *Store) lookLocked(sid string, t time.Time) {
+	if t.After(s.looked[sid]) {
+		s.looked[sid] = t
+	}
+}
+
+// Looked returns a copy of the last-look times, for persistence.
+func (s *Store) Looked() map[string]time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]time.Time, len(s.looked))
+	for k, v := range s.looked {
+		out[k] = v
+	}
+	return out
+}
+
+// SessionForPanel maps a cmux surface id to the Claude session it hosts.
+func (s *Store) SessionForPanel(panel string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.agents {
+		if strings.EqualFold(a.PanelID, panel) {
+			return a.SessionID
+		}
+	}
+	return ""
 }
 
 // SetTimeline replaces a session's transcript timeline; nil drops it.
@@ -350,7 +465,7 @@ func (s *Store) Views(now time.Time) []View {
 			v.PromptID = t.promptID
 			v.Preamble = sanitize.Line(t.preamble, 300)
 			v.Stop = sanitize.Line(t.stop, 3000)
-			v.StopID = t.stopID
+			v.StopID, v.StopAt = t.stopID, t.stopAt
 			v.Activity = make([]Activity, len(t.activity))
 			for i, ac := range t.activity {
 				ac.Detail = sanitize.Line(ac.Detail, 200)
@@ -384,6 +499,13 @@ func (s *Store) Views(now time.Time) []View {
 		}
 		v.Timeline = s.timelines[a.SessionID]
 		v.SubEvents = s.subEvents[a.SessionID]
+		v.History = s.history[a.SessionID]
+		if lk := s.looked[a.SessionID]; !lk.IsZero() {
+			v.Looked = lk
+			if t := s.tracks[a.SessionID]; t != nil {
+				v.News = newsSince(t.marks, lk)
+			}
+		}
 		v.Project = toolfmt.Project(v.Cwd)
 		v.Lane = s.lane(v, now)
 		v.LaneName = v.Lane.String()
@@ -396,6 +518,21 @@ func (s *Store) Views(now time.Time) []View {
 		return views[i].LastAt.After(views[j].LastAt)
 	})
 	return views
+}
+
+func newsSince(marks []mark, since time.Time) News {
+	var n News
+	for i := len(marks) - 1; i >= 0 && marks[i].at.After(since); i-- {
+		switch marks[i].kind {
+		case 'c':
+			n.Calls++
+		case 'e':
+			n.Errors++
+		case 's':
+			n.Turns++
+		}
+	}
+	return n
 }
 
 func (s *Store) lane(v View, now time.Time) Lane {

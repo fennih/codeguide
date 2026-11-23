@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -161,6 +162,26 @@ func (c Client) Sessions(ctx context.Context) (map[string]SessionRecord, error) 
 		}
 	}
 	return m, nil
+}
+
+// FocusedSurface returns the surface currently in front in cmux.
+func (c Client) FocusedSurface(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, 5*time.Second, "identify", "--json", "--no-caller", "--id-format", "uuids")
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		Focused struct {
+			SurfaceID string `json:"surface_id"`
+		} `json:"focused"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		return "", fmt.Errorf("cmux identify: %w", err)
+	}
+	if !ValidID(r.Focused.SurfaceID) {
+		return "", errors.New("cmux identify: no focused surface")
+	}
+	return strings.ToUpper(r.Focused.SurfaceID), nil
 }
 
 // Focus brings the given tab to the front.

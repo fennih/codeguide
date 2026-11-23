@@ -145,6 +145,9 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 	} else if v.Summary.NeedsUser && v.Summary.Ask != "" {
 		add(cell(sYellow.Render("▲ "), v.Summary.Ask, sYellow, inner))
 	}
+	if v.News.Any() {
+		add(cell(sBlue.Render("novità da "+ago(v.Looked, now)+": "), newsText(v.News), sBlue, inner))
+	}
 	if v.Lane != model.LaneWorking && v.Summary.Outcome != "" {
 		add(cell(sGreen.Render("✓ "), v.Summary.Outcome, lipgloss.NewStyle(), inner))
 	}
@@ -329,11 +332,37 @@ func diffAnn(plus, minus int) string {
 	return strings.Join(parts, " ")
 }
 
+func newsText(n model.News) string {
+	var parts []string
+	switch {
+	case n.Turns == 1:
+		parts = append(parts, "1 turno")
+	case n.Turns > 1:
+		parts = append(parts, fmt.Sprintf("%d turni", n.Turns))
+	}
+	switch {
+	case n.Calls == 1:
+		parts = append(parts, "1 azione")
+	case n.Calls > 1:
+		parts = append(parts, fmt.Sprintf("%d azioni", n.Calls))
+	}
+	switch {
+	case n.Errors == 1:
+		parts = append(parts, "1 errore")
+	case n.Errors > 1:
+		parts = append(parts, fmt.Sprintf("%d errori", n.Errors))
+	}
+	return strings.Join(parts, " · ")
+}
+
 // row renders an idle session as one line of exactly w cells.
 func row(v model.View, w int, selected bool, now time.Time) string {
 	mark := sDim.Render("  · ")
 	if v.Unread {
 		mark = sAccent.Render("  • ")
+	}
+	if v.News.Any() {
+		mark = sBlue.Render("  ✦ ")
 	}
 	if selected {
 		mark = sAccent.Render("  › ")

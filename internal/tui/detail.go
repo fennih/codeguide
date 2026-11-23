@@ -22,6 +22,10 @@ type detail struct {
 	top    int  // first visible timeline line when not following
 	diffs  bool
 	subs   bool // expand finished subagents too
+	turns  bool // show the turn outline instead of the timeline
+	// lookedAt is when the user last looked before opening; events after it
+	// are new and get an "eri qui" divider.
+	lookedAt time.Time
 }
 
 const (
@@ -41,7 +45,7 @@ func (m Model) detailView(now time.Time) string {
 		return strings.Join(append(out, m.detailFooter()), "\n")
 	}
 	head := detailHead(v, m.w, now)
-	body := m.detailLines(v, now)
+	body, _ := m.detailLines(v, now)
 	bodyH := max(1, m.h-len(head)-1)
 	start := m.detailStart(len(body), bodyH)
 	visible := body[start:min(len(body), start+bodyH)]
@@ -114,12 +118,17 @@ func detailHead(v model.View, w int, now time.Time) []string {
 	return append(lines, sFaint.Render(strings.Repeat("─", w)))
 }
 
-// detailLines renders the whole timeline; the caller picks the window.
-func (m Model) detailLines(v model.View, now time.Time) []string {
+// detailLines renders the whole body; the caller picks the window. div is
+// the line index of the "eri qui" divider, or -1.
+func (m Model) detailLines(v model.View, now time.Time) (lines []string, div int) {
+	if m.det.turns {
+		return turnLines(v, m.w, m.det.lookedAt)
+	}
 	w := m.w
 	if len(v.Timeline) == 0 {
-		return feedLines(v, w)
+		return feedLines(v, w), -1
 	}
+	div = -1
 	subsByCall := map[string]subagents.Agent{}
 	for _, sa := range v.Subagents {
 		if sa.ToolUseID != "" {
@@ -136,6 +145,10 @@ func (m Model) detailLines(v model.View, now time.Time) []string {
 	textW := w - tsW - 4
 	var out []string
 	for i, e := range v.Timeline {
+		if div < 0 && !m.det.lookedAt.IsZero() && e.At.After(m.det.lookedAt) && i > 0 {
+			div = len(out)
+			out = append(out, lookedDivider(m.det.lookedAt, w))
+		}
 		ts := sFaint.Render(e.At.Local().Format("15:04:05"))
 		switch e.Kind {
 		case transcript.Prompt:
@@ -196,7 +209,63 @@ func (m Model) detailLines(v model.View, now time.Time) []string {
 			}
 		}
 	}
-	return out
+	return out, div
+}
+
+func lookedDivider(at time.Time, w int) string {
+	l := sBlue.Render("── eri qui · " + stamp(at) + " ")
+	return l + sBlue.Render(strings.Repeat("─", max(0, w-width(l))))
+}
+
+// stamp shows the time, with the date when it is not today.
+func stamp(t time.Time) string {
+	t = t.Local()
+	now := time.Now()
+	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
+		return t.Format("15:04")
+	}
+	return t.Format("02/01 15:04")
+}
+
+// turnLines is the outline of finished turns from the summary cache.
+func turnLines(v model.View, w int, lookedAt time.Time) ([]string, int) {
+	out := []string{sSection.Render("  filo dei turni") + sDim.Render("  (t per tornare al racconto)"), ""}
+	div := -1
+	if len(v.History) == 0 {
+		out = append(out, sDim.Render("  nessun turno riassunto per questa sessione"))
+	}
+	pad := strings.Repeat(" ", 14)
+	for i, h := range v.History {
+		if div < 0 && !lookedAt.IsZero() && h.At.After(lookedAt) && i > 0 {
+			div = len(out)
+			out = append(out, lookedDivider(lookedAt, w))
+		}
+		head := " " + sFaint.Render(fmt.Sprintf("%-11s", stamp(h.At))) + " " + sGreen.Render("✓") + " "
+		outcome := h.Outcome
+		if outcome == "" {
+			outcome = "(nessun esito)"
+		}
+		out = append(out, head+sanitize.Truncate(outcome, w-width(head)))
+		if h.Goal != "" {
+			out = append(out, pad+sDim.Render(sanitize.Truncate(h.Goal, w-len(pad))))
+		}
+		if h.NeedsUser && h.Ask != "" {
+			out = append(out, pad+sYellow.Render(sanitize.Truncate("▲ "+h.Ask, w-len(pad))))
+		}
+	}
+	last := time.Time{}
+	if n := len(v.History); n > 0 {
+		last = v.History[n-1].At
+	}
+	if v.TurnStart.After(last) && (v.Lane == model.LaneWorking || v.StopID == "") {
+		if div < 0 && !lookedAt.IsZero() && v.TurnStart.After(lookedAt) && len(v.History) > 0 {
+			div = len(out)
+			out = append(out, lookedDivider(lookedAt, w))
+		}
+		head := " " + sFaint.Render(fmt.Sprintf("%-11s", stamp(v.TurnStart))) + " " + sAccent.Render("●") + " "
+		out = append(out, head+sanitize.Truncate("in corso: "+v.Goal(), w-width(head)))
+	}
+	return out, div
 }
 
 // subLines nests a subagent under the Agent call that started it.
@@ -348,7 +417,7 @@ func wrap(s string, w, maxLines int) []string {
 }
 
 func (m Model) detailFooter() string {
-	keys := "⏎ vai al tab · d diff · x subagent · ↑↓ scorri · f segui · n/p sessione · esc elenco"
+	keys := "⏎ vai al tab · u eri qui · t filo · d diff · x subagent · f segui · n/p sessione · esc elenco"
 	mode := sAccent.Render("● dal vivo")
 	if !m.det.follow {
 		mode = sYellow.Render("❚❚ in pausa (f per seguire)")

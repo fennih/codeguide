@@ -71,6 +71,11 @@ func run() error {
 		Root:      projects,
 		ColdStart: *coldStart,
 		ColdAge:   24 * time.Hour,
+		StateDir:  *stateDir,
+		SelfPanel: strings.ToUpper(os.Getenv("CMUX_SURFACE_ID")),
+	}
+	if !cmux.ValidID(col.SelfPanel) {
+		col.SelfPanel = ""
 	}
 	defer col.Tail.Close()
 
@@ -146,8 +151,21 @@ func run() error {
 		go sum.Run(ctx)
 		col.WarmUp()
 	}
+	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
+		return err
+	}
+	_ = os.Chmod(*stateDir, 0o700)
+	col.Persist = true
+	defer col.Flush()
+	col.Presence = &cmux.Presence{}
+	// Until the first event, only trust that the user is looking at cmux when
+	// ccwatch itself is the tab in front (it was just launched there).
+	if front, err := cm.FocusedSurface(ctx); err == nil {
+		col.Presence.Seed(front, front == col.SelfPanel)
+	}
+	go cm.Follow(ctx, col.Presence)
 
-	m := tui.New(cm, tui.Options{Resummarize: col.Resummarize, Focus: col.SetFocus})
+	m := tui.New(cm, tui.Options{Resummarize: col.Resummarize, Focus: col.SetFocus, Look: col.Look})
 	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
 	if !*noMouse {
 		opts = append(opts, tea.WithMouseCellMotion())

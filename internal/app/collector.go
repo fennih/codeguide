@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"ccwatch/internal/cmux"
 	"ccwatch/internal/model"
+	"ccwatch/internal/statefile"
 	"ccwatch/internal/subagents"
 	"ccwatch/internal/summary"
 	"ccwatch/internal/transcript"
@@ -25,6 +27,9 @@ const (
 
 	narrateEvery = 90 * time.Second
 	narrateCalls = 8
+
+	lookedSaveEvery = 10 * time.Second
+	lookedKeep      = 30 * 24 * time.Hour
 )
 
 type follow struct {
@@ -49,6 +54,10 @@ type Collector struct {
 	Narrate   bool
 	ColdStart int // sessions to summarize at startup
 	ColdAge   time.Duration
+	Presence  *cmux.Presence // nil when cmux events are unavailable
+	SelfPanel string         // ccwatch's own cmux surface, from CMUX_SURFACE_ID
+	StateDir  string         // where seen.json lives; "" disables it
+	Persist   bool           // write seen.json (off for --once and --frame)
 
 	mu           sync.Mutex
 	focus        string
@@ -57,6 +66,8 @@ type Collector struct {
 	lastSessions time.Time
 	follows      map[string]*follow
 	narr         map[string]*narration
+	lookedSaved  map[string]time.Time
+	lastSave     time.Time
 }
 
 // Init loads the backlog and the first cmux snapshot.
@@ -70,11 +81,13 @@ func (c *Collector) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	c.loadLooked()
 	c.Store.Apply(recs)
 	if c.Sum != nil {
 		for sid, s := range c.Sum.Latest() {
 			c.Store.SetSummary(sid, s)
 		}
+		c.Store.SetHistory(c.Sum.History())
 	}
 	now := time.Now()
 	c.refreshCmux(ctx, now, true)
@@ -126,6 +139,7 @@ func (c *Collector) Tick(ctx context.Context) {
 	}
 	events := c.Store.Apply(recs)
 	c.refreshCmux(ctx, now, false)
+	c.markLooked(now)
 	c.refreshSubagents(now, c.Store.Views(now))
 	views := c.Store.Views(now)
 	c.refreshTimelines(now, views)
@@ -151,6 +165,89 @@ func (c *Collector) Tick(ctx context.Context) {
 			c.Sum.Enqueue(j)
 		}
 	}
+}
+
+// Look records that the user just looked at a session from ccwatch.
+func (c *Collector) Look(sessionID string) {
+	c.Store.Look(sessionID, time.Now())
+}
+
+// markLooked credits the session in front in cmux, or the one open in the
+// detail view while ccwatch itself is in front, then persists now and then.
+func (c *Collector) markLooked(now time.Time) {
+	focus := c.focused()
+	if c.Presence != nil {
+		if surface, _, ok := c.Presence.Front(); ok {
+			switch {
+			case c.SelfPanel != "" && surface == c.SelfPanel:
+				if focus != "" {
+					c.Store.Look(focus, now)
+				}
+			default:
+				if sid := c.Store.SessionForPanel(surface); sid != "" {
+					c.Store.Look(sid, now)
+				}
+			}
+		}
+	} else if focus != "" {
+		c.Store.Look(focus, now)
+	}
+	if c.Persist && c.StateDir != "" && now.Sub(c.lastSave) >= lookedSaveEvery {
+		c.lastSave = now
+		c.saveLooked(now)
+	}
+}
+
+func (c *Collector) lookedPath() string { return filepath.Join(c.StateDir, "seen.json") }
+
+func (c *Collector) loadLooked() {
+	if c.StateDir == "" {
+		return
+	}
+	m := map[string]time.Time{}
+	if err := statefile.Read(c.lookedPath(), &m); err != nil {
+		return
+	}
+	for sid, t := range m {
+		if cmux.ValidID(sid) {
+			c.Store.Look(sid, t)
+		}
+	}
+	c.lookedSaved = m
+}
+
+func (c *Collector) saveLooked(now time.Time) {
+	m := c.Store.Looked()
+	for sid, t := range m {
+		if now.Sub(t) > lookedKeep {
+			delete(m, sid)
+		}
+	}
+	if sameTimes(m, c.lookedSaved) {
+		return
+	}
+	if err := statefile.Write(c.lookedPath(), m); err == nil {
+		c.lookedSaved = m
+	}
+}
+
+// Flush persists state before exit.
+func (c *Collector) Flush() {
+	if c.Persist && c.StateDir != "" {
+		c.saveLooked(time.Now())
+	}
+}
+
+func sameTimes(a, b map[string]time.Time) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if !b[k].Equal(v) {
+			return false
+		}
+	}
+	return true
 }
 
 // Resummarize regenerates the latest summary of one session.
@@ -354,7 +451,7 @@ func jobFor(v model.View) (summary.Job, bool) {
 	}
 	switch {
 	case v.StopID != "":
-		j.Mode, j.RecordID, j.Final = summary.ModeStop, v.StopID, v.Stop
+		j.Mode, j.RecordID, j.Final, j.TurnEnd = summary.ModeStop, v.StopID, v.Stop, v.StopAt
 	case v.PromptID != "":
 		j.Mode, j.RecordID = summary.ModeStart, v.PromptID
 	default:
