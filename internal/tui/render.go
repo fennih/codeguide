@@ -10,6 +10,8 @@ import (
 
 	"ccwatch/internal/model"
 	"ccwatch/internal/sanitize"
+	"ccwatch/internal/toolfmt"
+	"ccwatch/internal/transcript"
 )
 
 var (
@@ -146,46 +148,41 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 	if v.Lane != model.LaneWorking && v.Summary.Outcome != "" {
 		add(cell(sGreen.Render("✓ "), v.Summary.Outcome, lipgloss.NewStyle(), inner))
 	}
-	if v.Lane == model.LaneWorking && v.Preamble != "" {
-		add(cell(sDim.Render("▸ "), v.Preamble, sIntent, inner))
-	}
-
-	// Current-turn activity; fall back to the last calls when the turn is empty.
-	var acts []model.Activity
-	for _, a := range v.Activity {
-		if !a.At.Before(v.TurnStart) {
-			acts = append(acts, a)
+	if v.Lane == model.LaneWorking {
+		if v.Summary.Now != "" {
+			add(cell(sAccent.Render("ora   "), v.Summary.Now, lipgloss.NewStyle(), inner))
+		}
+		if say := lastSay(v); say != "" {
+			add(cell(sDim.Render("▸ "), say, sIntent, inner))
 		}
 	}
+
 	nAct := 5
 	if v.Lane != model.LaneWorking {
 		nAct = 3
 	}
-	if len(acts) > nAct {
-		acts = acts[len(acts)-nAct:]
-	}
-	toolW := 0
+	acts, calls, plus, minus := tileActs(v, nAct)
+	verbW := 0
 	for _, a := range acts {
-		if a.Detail != "" {
-			toolW = max(toolW, runewidth.StringWidth(a.Tool))
+		if a.detail != "" {
+			verbW = max(verbW, runewidth.StringWidth(a.verb))
 		}
 	}
-	toolW = min(toolW, 12)
-	for i, a := range acts {
-		dot := sGreen.Render("●")
-		if a.Error {
-			dot = sRed.Render("✗")
-		} else if i == len(acts)-1 && v.Lane == model.LaneWorking {
-			dot = sAccent.Render("●")
-		} else if v.Lane != model.LaneWorking {
-			dot = sDim.Render("●")
-		}
-		if a.Detail == "" {
-			add(cell(dot+" ", a.Tool, sBold, inner))
+	verbW = min(verbW, 12)
+	for _, a := range acts {
+		if a.detail == "" {
+			add(cell(a.dot+" ", a.verb, sBold, inner))
 			continue
 		}
-		prefix := dot + " " + sBold.Render(fit(a.Tool, toolW)) + " "
-		add(cell(prefix, a.Detail, sDim, inner))
+		prefix := a.dot + " " + sBold.Render(fit(a.verb, verbW)) + " "
+		if a.ann == "" {
+			add(cell(prefix, a.detail, sDim, inner))
+			continue
+		}
+		rest := inner - width(prefix) - width(a.ann) - 1
+		text := sDim.Render(sanitize.Truncate(a.detail, max(4, rest)))
+		pad := max(1, inner-width(prefix)-width(text)-width(a.ann))
+		add(prefix + text + strings.Repeat(" ", pad) + a.ann)
 	}
 
 	// Subagents: running ones, plus those started in this turn.
@@ -222,10 +219,13 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 	if v.Lane == model.LaneWorking {
 		foot = append(foot, sAccent.Render(spin(now))+" "+dur(now.Sub(v.TurnStart)))
 	}
-	if v.TurnCalls == 1 {
-		foot = append(foot, "1 chiamata")
-	} else if v.TurnCalls > 1 {
-		foot = append(foot, fmt.Sprintf("%d chiamate", v.TurnCalls))
+	if calls == 1 {
+		foot = append(foot, "1 azione")
+	} else if calls > 1 {
+		foot = append(foot, fmt.Sprintf("%d azioni", calls))
+	}
+	if plus+minus > 0 {
+		foot = append(foot, diffAnn(plus, minus))
 	}
 	if running > 0 {
 		foot = append(foot, fmt.Sprintf("%d subagent attivi", running))
@@ -236,6 +236,97 @@ func tile(v model.View, w int, selected bool, now time.Time) []string {
 
 	bottom := border.Render("╰" + strings.Repeat("─", w-2) + "╯")
 	return append(append([]string{top}, body...), bottom)
+}
+
+type actRow struct {
+	dot    string
+	verb   string
+	detail string
+	ann    string // styled, right-aligned
+}
+
+// tileActs lists the last n actions of the current turn, from the transcript
+// when it is followed and from cmux's Feed otherwise.
+func tileActs(v model.View, n int) (rows []actRow, calls, plus, minus int) {
+	working := v.Lane == model.LaneWorking
+	if len(v.Timeline) > 0 {
+		var tools []transcript.Event
+		for _, e := range v.Timeline[transcript.TurnIndex(v.Timeline)+1:] {
+			if e.Kind == transcript.Tool {
+				tools = append(tools, e)
+				plus += e.Plus
+				minus += e.Minus
+			}
+		}
+		calls = len(tools)
+		if len(tools) > n {
+			tools = tools[len(tools)-n:]
+		}
+		for _, e := range tools {
+			r := actRow{verb: e.Verb, detail: e.Detail}
+			switch {
+			case e.Error:
+				r.dot = sRed.Render("✗")
+			case !e.Done && working:
+				r.dot = sAccent.Render("●")
+			case working:
+				r.dot = sGreen.Render("●")
+			default:
+				r.dot = sDim.Render("●")
+			}
+			if e.Plus+e.Minus > 0 {
+				r.ann = diffAnn(e.Plus, e.Minus)
+			}
+			rows = append(rows, r)
+		}
+		return rows, calls, plus, minus
+	}
+	var acts []model.Activity
+	for _, a := range v.Activity {
+		if !a.At.Before(v.TurnStart) {
+			acts = append(acts, a)
+		}
+	}
+	if len(acts) > n {
+		acts = acts[len(acts)-n:]
+	}
+	for i, a := range acts {
+		r := actRow{verb: toolfmt.Verb(a.Tool), detail: a.Detail, dot: sGreen.Render("●")}
+		switch {
+		case a.Error:
+			r.dot = sRed.Render("✗")
+		case i == len(acts)-1 && working:
+			r.dot = sAccent.Render("●")
+		case !working:
+			r.dot = sDim.Render("●")
+		}
+		rows = append(rows, r)
+	}
+	return rows, v.TurnCalls, 0, 0
+}
+
+// lastSay is the latest thing the agent said in the current turn, falling
+// back to cmux's preamble.
+func lastSay(v model.View) string {
+	if len(v.Timeline) > 0 {
+		for i := len(v.Timeline) - 1; i > transcript.TurnIndex(v.Timeline); i-- {
+			if e := v.Timeline[i]; e.Kind == transcript.Say {
+				return e.Text
+			}
+		}
+	}
+	return v.Preamble
+}
+
+func diffAnn(plus, minus int) string {
+	var parts []string
+	if plus > 0 {
+		parts = append(parts, sGreen.Render(fmt.Sprintf("+%d", plus)))
+	}
+	if minus > 0 {
+		parts = append(parts, sRed.Render(fmt.Sprintf("−%d", minus)))
+	}
+	return strings.Join(parts, " ")
 }
 
 // row renders an idle session as one line of exactly w cells.

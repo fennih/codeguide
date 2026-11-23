@@ -33,12 +33,16 @@ type Agent struct {
 	Started     time.Time `json:"started"`
 	LastWrite   time.Time `json:"lastWrite"`
 	Calls       int       `json:"calls"`
+	ToolUseID   string    `json:"toolUseId,omitempty"` // the parent's Agent call that started it
+	Transcript  string    `json:"-"`
 }
 
 type meta struct {
 	AgentType   string `json:"agentType"`
 	Description string `json:"description"`
 	Model       string `json:"model"`
+	ToolUseID   string `json:"toolUseId"`
+	Finished    bool   `json:"finished"`
 }
 
 type cacheEntry struct {
@@ -93,18 +97,20 @@ func (r *Reader) read(base, cwd string, now time.Time) (Agent, bool) {
 		}
 		return a, true
 	}
-	a := Agent{ID: strings.TrimPrefix(filepath.Base(base), "agent-"), LastWrite: st.ModTime()}
+	a := Agent{ID: strings.TrimPrefix(filepath.Base(base), "agent-"), LastWrite: st.ModTime(), Transcript: jsonl}
+	finished := false
 	if mst, err := os.Stat(base + ".meta.json"); err == nil {
 		a.Started = mst.ModTime()
 		if b, err := readLimited(base+".meta.json", 64<<10); err == nil {
 			var m meta
 			if json.Unmarshal(b, &m) == nil {
-				a.Type, a.Description, a.Model = m.AgentType, m.Description, m.Model
+				a.Type, a.Description, a.Model, a.ToolUseID = m.AgentType, m.Description, m.Model, m.ToolUseID
+				finished = m.Finished
 			}
 		}
 	}
 	handedBack, endTurn := r.scanTail(jsonl, st.Size(), cwd, &a)
-	a.Running = !handedBack && now.Sub(a.LastWrite) < idleCutoff && !(endTurn && now.Sub(a.LastWrite) > 10*time.Second)
+	a.Running = !handedBack && !finished && now.Sub(a.LastWrite) < idleCutoff && !(endTurn && now.Sub(a.LastWrite) > 10*time.Second)
 	r.cache[jsonl] = cacheEntry{size: st.Size(), mtime: st.ModTime(), agent: a}
 	return a, true
 }

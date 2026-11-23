@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -77,6 +78,53 @@ func DetailJSON(tool, raw, cwd string) string {
 		return ""
 	}
 	return Detail(tool, m, cwd)
+}
+
+var verbs = map[string]string{
+	"Bash":            "Esegue",
+	"Read":            "Legge",
+	"Edit":            "Modifica",
+	"MultiEdit":       "Modifica",
+	"NotebookEdit":    "Modifica",
+	"Write":           "Scrive",
+	"Grep":            "Cerca",
+	"Glob":            "Cerca file",
+	"WebSearch":       "Cerca web",
+	"WebFetch":        "Apre",
+	"Agent":           "Delega",
+	"Task":            "Delega",
+	"Skill":           "Skill",
+	"AskUserQuestion": "Ti chiede",
+	"ExitPlanMode":    "Piano",
+	"EnterPlanMode":   "Pianifica",
+	"ToolSearch":      "Carica tool",
+	"TodoWrite":       "Lista",
+	"Monitor":         "Monitora",
+	"SendMessage":     "Messaggio",
+}
+
+// Verb names a tool call as an action a person would describe.
+func Verb(tool string) string {
+	if v, ok := verbs[tool]; ok {
+		return v
+	}
+	return ShortTool(tool)
+}
+
+var (
+	pasteTagRe = regexp.MustCompile(`</?pasted_content[^>]*>`)
+	systemTags = []string{"<task-notification", "<system-reminder", "<local-command", "<command-name>", "<bash-stdout", "<bash-input"}
+)
+
+// CleanPrompt drops harness-injected turns and unwraps pasted-content tags.
+func CleanPrompt(p string) string {
+	t := strings.TrimSpace(p)
+	for _, tag := range systemTags {
+		if strings.HasPrefix(t, tag) {
+			return ""
+		}
+	}
+	return strings.TrimSpace(pasteTagRe.ReplaceAllString(t, " "))
 }
 
 // ShortTool trims MCP prefixes: mcp__claude_ai_Atlassian__search -> Atlassian.search

@@ -32,9 +32,21 @@ type Snapshot struct {
 type focusDone struct{ err error }
 type frame time.Time
 
+// Options are callbacks into the collector.
+type Options struct {
+	Resummarize func(sessionID string)
+	Focus       func(sessionID string) // session shown in the detail view, "" for none
+}
+
+// hit is a clickable screen rectangle for one session.
+type hit struct {
+	y0, y1, x0, x1 int
+	sid            string
+}
+
 type Model struct {
-	cmux        cmux.Client
-	resummarize func(sessionID string)
+	cmux cmux.Client
+	opt  Options
 
 	snap     Snapshot
 	w, h     int
@@ -45,10 +57,42 @@ type Model struct {
 	editing  bool
 	help     bool
 	status   string
+	inDetail bool
+	det      detail
 }
 
-func New(c cmux.Client, resummarize func(string)) Model {
-	return Model{cmux: c, resummarize: resummarize, w: 100, h: 40}
+func New(c cmux.Client, o Options) Model {
+	return Model{cmux: c, opt: o, w: 100, h: 40}
+}
+
+// WithDetail opens the detail view of one session (used by --frame).
+func (m Model) WithDetail(sid string) Model {
+	return m.openDetail(sid)
+}
+
+func (m Model) openDetail(sid string) Model {
+	m.inDetail, m.det, m.status = true, detail{sid: sid, follow: true}, ""
+	if m.opt.Focus != nil {
+		m.opt.Focus(sid)
+	}
+	return m
+}
+
+func (m Model) closeDetail() Model {
+	m.inDetail, m.selected, m.status = false, m.det.sid, ""
+	if m.opt.Focus != nil {
+		m.opt.Focus("")
+	}
+	return m
+}
+
+func (m Model) jump(v model.View) tea.Cmd {
+	c := m.cmux
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		return focusDone{c.Focus(ctx, v.WorkspaceID, v.PanelID)}
+	}
 }
 
 func (m Model) Init() tea.Cmd { return animate() }
@@ -69,7 +113,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.status = sanitize.Line("salto non riuscito: "+msg.err.Error(), 120)
 		}
+	case tea.MouseMsg:
+		return m.mouse(msg)
 	case tea.KeyMsg:
+		if m.inDetail {
+			return m.detailKey(msg)
+		}
 		return m.key(msg)
 	}
 	return m, nil
@@ -117,16 +166,14 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(items) > 0 {
 			m.selected = items[len(items)-1].SessionID
 		}
-	case "enter":
+	case "enter", " ":
 		if idx >= 0 {
-			v := items[idx]
-			c := m.cmux
+			return m.openDetail(items[idx].SessionID), nil
+		}
+	case "o":
+		if idx >= 0 {
 			m.status = ""
-			return m, func() tea.Msg {
-				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-				defer cancel()
-				return focusDone{c.Focus(ctx, v.WorkspaceID, v.PanelID)}
-			}
+			return m, m.jump(items[idx])
 		}
 	case "g":
 		m.byProj = !m.byProj
@@ -137,12 +184,119 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.filter = ""
 	case "s":
-		if idx >= 0 && m.resummarize != nil {
-			m.resummarize(items[idx].SessionID)
+		if idx >= 0 && m.opt.Resummarize != nil {
+			m.opt.Resummarize(items[idx].SessionID)
 			m.status = "riassunto richiesto"
 		}
 	case "?":
 		m.help = !m.help
+	}
+	return m, nil
+}
+
+func (m Model) detailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "backspace", "left", "h":
+		return m.closeDetail(), nil
+	case "enter", "o":
+		if v, ok := m.viewByID(m.det.sid); ok {
+			m.status = ""
+			return m, m.jump(v)
+		}
+	case "up", "k":
+		return m.detailScroll(-1), nil
+	case "down", "j":
+		return m.detailScroll(1), nil
+	case "pgup", "ctrl+u":
+		return m.detailScroll(-(m.h / 2)), nil
+	case "pgdown", "ctrl+d", " ":
+		return m.detailScroll(m.h / 2), nil
+	case "home", "g":
+		m.det.follow, m.det.top = false, 0
+	case "end", "G", "f":
+		m.det.follow = true
+	case "d":
+		m.det.diffs = !m.det.diffs
+	case "x":
+		m.det.subs = !m.det.subs
+	case "n", "p":
+		items := m.items()
+		if len(items) == 0 {
+			break
+		}
+		i := indexOf(items, m.det.sid)
+		if k.String() == "n" {
+			i = (i + 1) % len(items)
+		} else {
+			i = (i - 1 + len(items)) % len(items)
+		}
+		return m.openDetail(items[i].SessionID), nil
+	case "s":
+		if m.opt.Resummarize != nil {
+			m.opt.Resummarize(m.det.sid)
+			m.status = "riassunto richiesto"
+		}
+	}
+	return m, nil
+}
+
+// detailScroll moves the timeline window; reaching the bottom resumes follow.
+func (m Model) detailScroll(d int) Model {
+	v, ok := m.viewByID(m.det.sid)
+	if !ok {
+		return m
+	}
+	now := time.Now()
+	total := len(m.detailLines(v, now))
+	bodyH := max(1, m.h-len(detailHead(v, m.w, now))-1)
+	maxTop := max(0, total-bodyH)
+	t := m.detailStart(total, bodyH) + d
+	if t >= maxTop {
+		m.det.follow = true
+		return m
+	}
+	m.det.follow, m.det.top = false, max(0, t)
+	return m
+}
+
+func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	if m.inDetail {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			return m.detailScroll(-3), nil
+		case tea.MouseButtonWheelDown:
+			return m.detailScroll(3), nil
+		}
+		return m, nil
+	}
+	items := m.items()
+	if len(items) == 0 {
+		return m, nil
+	}
+	idx := indexOf(items, m.selected)
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.selected = items[max(idx-1, 0)].SessionID
+	case tea.MouseButtonWheelDown:
+		m.selected = items[min(idx+1, len(items)-1)].SessionID
+	case tea.MouseButtonLeft:
+		_, hits := m.listFrame(time.Now())
+		for _, h := range hits {
+			if msg.Y < h.y0 || msg.Y >= h.y1 || msg.X < h.x0 || msg.X >= h.x1 {
+				continue
+			}
+			// A click on the selected session opens it; otherwise it selects.
+			if h.sid == items[idx].SessionID {
+				return m.openDetail(h.sid), nil
+			}
+			m.selected = h.sid
+			break
+		}
 	}
 	return m, nil
 }
@@ -188,6 +342,15 @@ func (m Model) View() string {
 		return "ccwatch: finestra troppo piccola"
 	}
 	now := time.Now()
+	if m.inDetail {
+		return m.detailView(now)
+	}
+	out, _ := m.listFrame(now)
+	return strings.Join(out, "\n")
+}
+
+// listFrame renders the session list and the screen rectangle of each session.
+func (m Model) listFrame(now time.Time) ([]string, []hit) {
 	items := m.items()
 	selIdx := indexOf(items, m.selected)
 	selID := ""
@@ -196,6 +359,7 @@ func (m Model) View() string {
 	}
 
 	var lines []string
+	var hits []hit
 	selStart, selEnd := 0, 0
 	mark := func(id string, start int) {
 		if id == selID {
@@ -224,8 +388,10 @@ func (m Model) View() string {
 			end := min(i+cols, len(vs))
 			var blocks []string
 			start := len(lines)
-			for _, v := range vs[i:end] {
-				blocks = append(blocks, strings.Join(tile(v, tileW, v.SessionID == selID, now), "\n"))
+			for c, v := range vs[i:end] {
+				t := tile(v, tileW, v.SessionID == selID, now)
+				blocks = append(blocks, strings.Join(t, "\n"))
+				hits = append(hits, hit{y0: start, y1: start + len(t), x0: c * tileW, x1: (c + 1) * tileW, sid: v.SessionID})
 			}
 			joined := strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, blocks...), "\n")
 			lines = append(lines, joined...)
@@ -239,6 +405,7 @@ func (m Model) View() string {
 		for _, v := range vs {
 			start := len(lines)
 			lines = append(lines, row(v, m.w, v.SessionID == selID, now))
+			hits = append(hits, hit{y0: start, y1: start + 1, x0: 0, x1: m.w, sid: v.SessionID})
 			mark(v.SessionID, start)
 		}
 	}
@@ -254,6 +421,7 @@ func (m Model) View() string {
 			for _, v := range vs {
 				start := len(lines)
 				lines = append(lines, row(v, m.w, v.SessionID == selID, now))
+				hits = append(hits, hit{y0: start, y1: start + 1, x0: 0, x1: m.w, sid: v.SessionID})
 				mark(v.SessionID, start)
 			}
 		}
@@ -282,17 +450,23 @@ func (m Model) View() string {
 		visible = append(visible, "")
 	}
 
+	// The header takes screen row 0; body line i lands on row 1+i-scroll.
+	for i := range hits {
+		hits[i].y0 += 1 - scroll
+		hits[i].y1 += 1 - scroll
+	}
+
 	out := []string{m.header(now)}
 	out = append(out, visible...)
 	if m.help {
 		out = append(out,
-			sDim.Render(" ↑↓/jk seleziona   ⏎ vai al tab in cmux   g ordina per progetto   / filtra   esc pulisci filtro"),
-			sDim.Render(" tab mostra sessioni vecchie   s rigenera goal/esito della selezionata   ? aiuto   q esci"),
-			sDim.Render(" ▲ serve te   ● ultima azione   ↳ subagent   ✓ esito ultimo turno   • non letto in cmux"),
+			sDim.Render(" ↑↓/jk seleziona   ⏎ o click apre il dettaglio dal vivo   o vai al tab in cmux   / filtra"),
+			sDim.Render(" g ordina per progetto   tab sessioni vecchie   s rigenera goal/esito   ? aiuto   q esci"),
+			sDim.Render(" ▲ serve te   ● azione   ✗ errore   +N −M righe modificate   ↳ subagent   ✓ esito   • non letto"),
 		)
 	}
 	out = append(out, m.footer())
-	return strings.Join(out, "\n")
+	return out, hits
 }
 
 func (m Model) header(now time.Time) string {
@@ -347,7 +521,7 @@ func (m Model) footer() string {
 		parts = append(parts, sRed.Render(sanitize.Line(msg, 100)))
 	}
 	if len(parts) == 0 {
-		parts = append(parts, sDim.Render("⏎ vai al tab · / filtra · g progetto · tab vecchie · ? aiuto · q esci"))
+		parts = append(parts, sDim.Render("⏎ dettaglio · o vai al tab · / filtra · g progetto · tab vecchie · ? aiuto · q esci"))
 	}
 	return lipgloss.NewStyle().MaxWidth(m.w).Render(" " + strings.Join(parts, sDim.Render("  ·  ")))
 }

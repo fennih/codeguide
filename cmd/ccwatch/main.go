@@ -40,7 +40,11 @@ func run() error {
 	var (
 		once       = flag.Bool("once", false, "print one JSON snapshot and exit (no model calls)")
 		frameSize  = flag.String("frame", "", "print one rendered frame of WIDTHxHEIGHT and exit (no model calls)")
-		noLLM      = flag.Bool("no-llm", false, "disable goal/outcome summaries")
+		noLLM      = flag.Bool("no-llm", false, "disable goal/outcome summaries and live narration")
+		noNarrate  = flag.Bool("no-narrate", false, "disable the live \"ora:\" narration of working sessions")
+		nowPerHour = flag.Int("narrate-per-hour", 40, "cap on live narration calls per hour")
+		noMouse    = flag.Bool("no-mouse", false, "do not capture the mouse")
+		detailID   = flag.String("detail", "", "with --frame: render the detail view of this session id")
 		claudeBin  = flag.String("claude-bin", "", "Claude Code binary for summaries (default: first non-cmux-shim claude in PATH)")
 		cmuxBin    = flag.String("cmux-bin", "", "cmux CLI (default: $CMUX_BUNDLED_CLI_PATH or cmux in PATH)")
 		modelName  = flag.String("model", "haiku", "model for summaries")
@@ -58,11 +62,13 @@ func run() error {
 	}
 	cm := cmux.Client{Bin: cbin}
 	store := model.NewStore(*staleAfter)
+	projects := filepath.Join(home, ".claude", "projects")
 	col := &app.Collector{
 		Cmux:      cm,
 		Tail:      workstream.NewTailer(*logPath),
 		Store:     store,
-		Subs:      subagents.NewReader(filepath.Join(home, ".claude", "projects")),
+		Subs:      subagents.NewReader(projects),
+		Root:      projects,
 		ColdStart: *coldStart,
 		ColdAge:   24 * time.Hour,
 	}
@@ -81,7 +87,7 @@ func run() error {
 			return err
 		}
 		sum, err = summary.New(summary.Config{
-			Bin: bin, Model: *modelName, StateDir: *stateDir, MaxPerHour: *maxPerHour,
+			Bin: bin, Model: *modelName, StateDir: *stateDir, MaxPerHour: *maxPerHour, NowPerHour: *nowPerHour,
 		}, func(sid string, s model.Summary) {
 			store.SetSummary(sid, s)
 		})
@@ -89,6 +95,7 @@ func run() error {
 			return err
 		}
 		col.Sum = sum
+		col.Narrate = !*noNarrate
 	}
 
 	if err := col.Init(ctx); err != nil {
@@ -119,7 +126,16 @@ func run() error {
 		if _, err := fmt.Sscanf(*frameSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			return errors.New("--frame wants WIDTHxHEIGHT")
 		}
-		var fm tea.Model = tui.New(cm, nil)
+		base := tui.New(cm, tui.Options{Focus: col.SetFocus})
+		if *detailID != "" {
+			if !cmux.ValidID(*detailID) {
+				return errors.New("--detail wants a session id")
+			}
+			base = base.WithDetail(*detailID)
+			col.Tick(ctx)
+			col.Tick(ctx) // the second pass reads the subagents found by the first
+		}
+		var fm tea.Model = base
 		fm, _ = fm.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		fm, _ = fm.Update(snapshot())
 		fmt.Println(fm.View())
@@ -131,8 +147,12 @@ func run() error {
 		col.WarmUp()
 	}
 
-	m := tui.New(cm, col.Resummarize)
-	prog = tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	m := tui.New(cm, tui.Options{Resummarize: col.Resummarize, Focus: col.SetFocus})
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
+	if !*noMouse {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	prog = tea.NewProgram(m, opts...)
 	go func() {
 		prog.Send(snapshot())
 		t := time.NewTicker(700 * time.Millisecond)

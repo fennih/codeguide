@@ -4,7 +4,6 @@ package model
 
 import (
 	"encoding/json"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"ccwatch/internal/sanitize"
 	"ccwatch/internal/subagents"
 	"ccwatch/internal/toolfmt"
+	"ccwatch/internal/transcript"
 	"ccwatch/internal/workstream"
 )
 
@@ -41,11 +41,13 @@ type Activity struct {
 
 // Summary is model-written text for one session.
 type Summary struct {
-	Goal      string `json:"goal,omitempty"`
-	Outcome   string `json:"outcome,omitempty"`
-	NeedsUser bool   `json:"needsUser,omitempty"`
-	Ask       string `json:"ask,omitempty"`
-	ForRecord string `json:"forRecord,omitempty"` // Feed record id it was made from
+	Goal      string    `json:"goal,omitempty"`
+	Outcome   string    `json:"outcome,omitempty"`
+	NeedsUser bool      `json:"needsUser,omitempty"`
+	Ask       string    `json:"ask,omitempty"`
+	ForRecord string    `json:"forRecord,omitempty"` // Feed record id it was made from
+	Now       string    `json:"now,omitempty"`       // live narration of a running turn
+	NowAt     time.Time `json:"nowAt,omitempty"`     // when Now was written
 }
 
 // track is the per-session state built from Feed records.
@@ -92,6 +94,10 @@ type View struct {
 	PanelID     string            `json:"-"`
 	WorkspaceID string            `json:"-"`
 	Transcript  string            `json:"-"`
+	// Timeline is read from Claude's transcript, only for sessions that are
+	// working, recently waiting on the user, or open in the detail view.
+	Timeline  []transcript.Event            `json:"timeline,omitempty"`
+	SubEvents map[string][]transcript.Event `json:"-"` // by subagent id, detail view only
 }
 
 // Goal is the best available one-line goal.
@@ -112,6 +118,8 @@ type Store struct {
 	sessions  map[string]cmux.SessionRecord
 	subs      map[string][]subagents.Agent
 	summaries map[string]Summary
+	timelines map[string][]transcript.Event
+	subEvents map[string]map[string][]transcript.Event
 	seen      map[string]struct{}
 	staleAge  time.Duration
 }
@@ -123,6 +131,8 @@ func NewStore(staleAge time.Duration) *Store {
 		sessions:  map[string]cmux.SessionRecord{},
 		subs:      map[string][]subagents.Agent{},
 		summaries: map[string]Summary{},
+		timelines: map[string][]transcript.Event{},
+		subEvents: map[string]map[string][]transcript.Event{},
 		staleAge:  staleAge,
 	}
 }
@@ -169,7 +179,7 @@ func (s *Store) Apply(recs []workstream.Record) (turnEvents []workstream.Record)
 				continue
 			}
 			// Background-task notifications start a turn but are not the user's goal.
-			if p := cleanPrompt(r.Payload.UserPrompt.Text); p != "" {
+			if p := toolfmt.CleanPrompt(r.Payload.UserPrompt.Text); p != "" {
 				t.prompt = p
 				t.promptID = r.ID
 			}
@@ -248,14 +258,47 @@ func (s *Store) SetSubagents(sessionID string, a []subagents.Agent) {
 	s.mu.Unlock()
 }
 
+// SetSummary stores a goal/outcome summary, or only the live narration when
+// sum carries nothing but Now.
 func (s *Store) SetSummary(sessionID string, sum Summary) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	cur := s.summaries[sessionID]
+	if sum.Now != "" && sum.Goal == "" && sum.Outcome == "" {
+		cur.Now, cur.NowAt = sum.Now, sum.NowAt
+		s.summaries[sessionID] = cur
+		return
+	}
 	if sum.Goal == "" {
 		sum.Goal = cur.Goal
 	}
+	sum.Now, sum.NowAt = cur.Now, cur.NowAt
 	s.summaries[sessionID] = sum
-	s.mu.Unlock()
+}
+
+// SetTimeline replaces a session's transcript timeline; nil drops it.
+func (s *Store) SetTimeline(sessionID string, ev []transcript.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ev == nil {
+		delete(s.timelines, sessionID)
+		delete(s.subEvents, sessionID)
+		return
+	}
+	s.timelines[sessionID] = ev
+}
+
+// SetSubTimeline replaces one subagent's timeline. The inner map is copied so
+// views already handed out are never mutated.
+func (s *Store) SetSubTimeline(sessionID, agentID string, ev []transcript.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := make(map[string][]transcript.Event, len(s.subEvents[sessionID])+1)
+	for k, v := range s.subEvents[sessionID] {
+		next[k] = v
+	}
+	next[agentID] = ev
+	s.subEvents[sessionID] = next
 }
 
 // TranscriptFor returns cmux's transcript path for a session.
@@ -333,8 +376,14 @@ func (s *Store) Views(now time.Time) []View {
 			if sum.ForRecord != "" && sum.ForRecord != v.StopID {
 				sum.Outcome, sum.NeedsUser, sum.Ask = "", false, ""
 			}
+			if sum.NowAt.Before(v.TurnStart) {
+				sum.Now = ""
+			}
+			sum.Now = sanitize.Line(sum.Now, 160)
 			v.Summary = sum
 		}
+		v.Timeline = s.timelines[a.SessionID]
+		v.SubEvents = s.subEvents[a.SessionID]
 		v.Project = toolfmt.Project(v.Cwd)
 		v.Lane = s.lane(v, now)
 		v.LaneName = v.Lane.String()
@@ -361,22 +410,6 @@ func (s *Store) lane(v View, now time.Time) Lane {
 		return LaneStale
 	}
 	return LaneIdle
-}
-
-var (
-	pasteTagRe = regexp.MustCompile(`</?pasted_content[^>]*>`)
-	systemTags = []string{"<task-notification", "<system-reminder", "<local-command", "<command-name>", "<bash-stdout", "<bash-input"}
-)
-
-// cleanPrompt drops harness-injected turns and unwraps pasted-content tags.
-func cleanPrompt(p string) string {
-	t := strings.TrimSpace(p)
-	for _, tag := range systemTags {
-		if strings.HasPrefix(t, tag) {
-			return ""
-		}
-	}
-	return strings.TrimSpace(pasteTagRe.ReplaceAllString(t, " "))
 }
 
 func pendingText(r *workstream.Record, cwd string) string {
